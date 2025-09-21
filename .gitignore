@@ -1,0 +1,11 @@
+# Node stuff
+node_modules/
+*.log
+dist/
+build/
+# macOS crud
+.DS_Store
+# Electron build outputs (if you later package the app)
+*.dmg
+*.exe
+*.AppImage

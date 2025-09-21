@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>P2P Demo</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 16px; max-width: 900px }
+      .row { display:flex; gap:8px; margin:8px 0 }
+      input[type="text"] { flex:1; padding:8px }
+      textarea { width:100%; height:140px; padding:8px }
+      .pill { padding:4px 8px; border-radius:999px; background:#eee }
+      button { padding:8px 12px; cursor:pointer }
+    </style>
+  </head>
+  <body>
+    <h2>P2P Demo — chat & file share</h2>
+    <div>My ID: <span id="self" class="pill">—</span></div>
+
+    <h3>Connect</h3>
+    <div class="row">
+      <input id="room" placeholder="Room name (e.g., demo-room-1)" />
+      <input id="signalUrl" placeholder="ws://YOUR_MAC_LAN_IP:8080" />
+      <button id="join">Join</button>
+    </div>
+    <div class="row">
+      <input id="turn" placeholder="TURN (optional): turn:YOUR_MAC_LAN_IP:3478" />
+      <input id="turnUser" placeholder="TURN user (user)" />
+      <input id="turnPass" placeholder="TURN pass (pass)" />
+    </div>
+
+    <h3>Chat</h3>
+    <div class="row">
+      <input id="chatInput" placeholder="Type message…" />
+      <button id="send">Send</button>
+    </div>
+    <textarea id="chatLog" readonly></textarea>
+
+    <h3>Files</h3>
+    <div class="row">
+      <input id="fileHash" placeholder="Enter a file key, e.g., hello:123" />
+      <button id="announce">Announce</button>
+    </div>
+    <div class="row">
+      <input id="fetchHash" placeholder="Fetch key, e.g., hello:123" />
+      <button id="fetch">Fetch</button>
+    </div>
+    <textarea id="files" readonly placeholder="File events will appear here…"></textarea>
+   
+    <!-- Add this line -->
+    <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+    <!-- Your renderer bundle -->
+    <script src="./renderer.js"></script>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
+
