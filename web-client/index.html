@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>P2P Web Client</title>
+  <style>
+    body { font-family: sans-serif; margin: 2em; }
+    label { display: block; margin-top: 1em; }
+    textarea { width: 100%; height: 150px; }
+  </style>
+</head>
+<body>
+  <h1>P2P Web Client</h1>
+
+  <label>
+    Room:
+    <input id="room" value="demo-room-1">
+  </label>
+
+  <label>
+    Signaling URL:
+    <input id="signalUrl" value="wss://signal.yourdomain.com">
+  </label>
+
+  <label>
+    TURN (optional):
+    <input id="turn" placeholder="turn:turn.yourdomain.com:3478">
+  </label>
+
+  <button id="joinBtn">Join</button>
+  <button id="leaveBtn">Leave</button>
+
+  <h2>Chat</h2>
+  <textarea id="chatLog" readonly></textarea><br>
+  <input id="chatMsg" placeholder="Type message">
+  <button id="sendBtn">Send</button>
+
+  <script>
+    let ws, pc, dc;
+
+    const log = (msg) => {
+      const box = document.getElementById('chatLog');
+      box.value += msg + "\n";
+      box.scrollTop = box.scrollHeight;
+    };
+
+    document.getElementById('joinBtn').onclick = async () => {
+      const room = document.getElementById('room').value;
+      const url = document.getElementById('signalUrl').value;
+      const turnUrl = document.getElementById('turn').value;
+
+      log("Connecting to signaling...");
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        log("Connected to signaling");
+        ws.send(JSON.stringify({ type: "join", room }));
+      };
+
+      ws.onerror = (e) => log("Signaling error: " + e.message);
+      ws.onclose = () => log("Disconnected from signaling");
+
+      ws.onmessage = async (ev) => {
+        const msg = JSON.parse(ev.data);
+
+        if (msg.type === "peers") {
+          const self = msg.self;
+          for (const peerId of msg.peers) {
+            startPeer(peerId, true, turnUrl);
+          }
+        } else if (msg.type === "new-peer") {
+          startPeer(msg.id, false, turnUrl);
+        } else if (msg.type === "signal") {
+          const peer = peers[msg.from];
+          if (peer) {
+            await peer.pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+            if (msg.data.type === "offer") {
+              const answer = await peer.pc.createAnswer();
+              await peer.pc.setLocalDescription(answer);
+              ws.send(JSON.stringify({ type: "signal", target: msg.from, data: peer.pc.localDescription }));
+            }
+          }
+        }
+      };
+    };
+
+    document.getElementById('leaveBtn').onclick = () => {
+      if (ws) ws.close();
+      Object.values(peers).forEach(p => p.pc.close());
+      peers = {};
+      log("Left room");
+    };
+
+    document.getElementById('sendBtn').onclick = () => {
+      const msg = document.getElementById('chatMsg').value;
+      for (const peer of Object.values(peers)) {
+        if (peer.dc && peer.dc.readyState === "open") {
+          peer.dc.send(msg);
+        }
+      }
+      log("Me: " + msg);
+    };
+
+    let peers = {};
+    function startPeer(peerId, initiator, turnUrl) {
+      const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+      if (turnUrl) {
+        config.iceServers.push({ urls: turnUrl, username: "demoUser", credential: "demoPass_ChangeMe" });
+      }
+
+      const pc = new RTCPeerConnection(config);
+      const dc = pc.createDataChannel("chat");
+      dc.onmessage = (e) => log(peerId + ": " + e.data);
+      dc.onopen = () => log("Connected to " + peerId);
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) return;
+        ws.send(JSON.stringify({ type: "signal", target: peerId, data: pc.localDescription }));
+      };
+
+      peers[peerId] = { pc, dc };
+
+      if (initiator) {
+        pc.createOffer().then(offer => {
+          pc.setLocalDescription(offer);
+        });
+      }
+    }
+  </script>
+</body>
+</html>
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>P2P Web Client</title>
+    <style>
+      body { font:14px system-ui, sans-serif; margin:16px; max-width:900px }
+      .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap }
+      input[type="text"] { flex:1; min-width:240px; padding:8px }
+      textarea { width:100%; height:140px; padding:8px }
+      button { padding:8px 12px; cursor:pointer }
+      .pill { padding:4px 8px; border-radius:999px; background:#eee }
+    </style>
+    <!-- SimplePeer prebuilt (avoids bundling issues) -->
+    <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+  </head>
+  <body>
+    <h2>P2P Web Client</h2>
+
+    <div class="row">
+      <input id="room" placeholder="Room (e.g., demo-room-1)"/>
+      <input id="signalUrl" placeholder="ws://YOUR_MAC_LAN_IP:8080"/>
+      <button id="join">Join</button>
+    </div>
+    <div class="row">
+      <input id="turn" placeholder="TURN (optional): turn:YOUR_MAC_LAN_IP:3478"/>
+      <input id="turnUser" placeholder="user"/>
+      <input id="turnPass" placeholder="pass"/>
+    </div>
+
+    <h3>Chat</h3>
+    <div class="row">
+      <input id="chatInput" placeholder="Type message…"/>
+      <button id="send">Send</button>
+    </div>
+    <textarea id="chatLog" readonly></textarea>
+
+    <h3>Files</h3>
+    <div class="row">
+      <input id="fileHash" placeholder="Announce key (hello:123)"/>
+      <button id="announce">Announce</button>
+    </div>
+    <div class="row">
+      <input id="fetchHash" placeholder="Fetch key (hello:123)"/>
+      <button id="fetch">Fetch</button>
+    </div>
+    <textarea id="files" readonly></textarea>
+
+    <script>
+      // --- state
+      const peers = new Map();
+      let ws = null, selfId = '';
+      const FILES = new Map();
+
+      // --- UI helpers
+      const chatLog = document.getElementById('chatLog');
+      const filesLog = document.getElementById('files');
+      const logChat = s => { chatLog.value += s + '\n'; chatLog.scrollTop = chatLog.scrollHeight };
+      const logFile = s => { filesLog.value += s + '\n'; filesLog.scrollTop = filesLog.scrollHeight };
+
+      // --- ICE servers (TURN optional)
+      function getIceServers() {
+        const turn = document.getElementById('turn').value.trim();
+        const user = document.getElementById('turnUser').value.trim() || 'user';
+        const pass = document.getElementById('turnPass').value.trim() || 'pass';
+        const servers = [{ urls: ['stun:stun.l.google.com:19302'] }];
+        if (turn) servers.push({ urls: [turn], username: user, credential: pass });
+        return servers;
+      }
+
+      // --- signaling
+      function connect(url, room) {
+        ws = new WebSocket(url);
+        ws.onopen = () => ws.send(JSON.stringify({ type:'join', room }));
+        ws.onmessage = ev => {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'peers') {
+            selfId = msg.self;
+            msg.peers.forEach(pid => startPeer(pid, true));
+          } else if (msg.type === 'new-peer') {
+            startPeer(msg.id, false);
+          } else if (msg.type === 'signal') {
+            let p = peers.get(msg.from);
+            if (!p) p = startPeer(msg.from, false);
+            p.signal(msg.data);
+          } else if (msg.type === 'peer-left') {
+            const p = peers.get(msg.id);
+            if (p) { p.destroy(); peers.delete(msg.id); }
+            logChat(`Peer left: ${msg.id}`);
+          }
+        };
+        ws.onclose = () => logChat('Disconnected from signaling.');
+      }
+
+      // --- webrtc peer
+      function startPeer(id, initiator) {
+        if (peers.has(id)) return peers.get(id);
+        const p = new SimplePeer({ initiator, trickle:false, config:{ iceServers: getIceServers() } });
+        peers.set(id, p);
+        p.on('signal', data => ws?.send(JSON.stringify({ type:'signal', target:id, data })));
+        p.on('connect', () => logChat(`Connected to ${id}`));
+        p.on('close', () => { peers.delete(id); logChat(`Closed ${id}`); });
+        p.on('error', err => logChat(`Peer error (${id}): ${err.message}`));
+        p.on('data', buf => {
+          try {
+            const msg = JSON.parse(new TextDecoder().decode(buf));
+            if (msg.type === 'chat') logChat(`[${id}] ${msg.text}`);
+            if (msg.type === 'file-announce') logFile(`Announced by ${id}: ${msg.hash}`);
+            if (msg.type === 'file-req') {
+              const data = FILES.get(msg.hash);
+              if (data) {
+                const out = JSON.stringify({ type:'file-data', hash:msg.hash, data:[...data] });
+                p.send(new TextEncoder().encode(out));
+              }
+            }
+            if (msg.type === 'file-data') {
+              const u8 = new Uint8Array(msg.data);
+              logFile(`Received ${msg.hash}: ${new TextDecoder().decode(u8)}`);
+            }
+          } catch {}
+        });
+        return p;
+      }
+
+      // --- broadcast
+      function broadcast(obj) {
+        const data = new TextEncoder().encode(JSON.stringify(obj));
+        for (const [, p] of peers) { try { p.send(data) } catch {} }
+      }
+
+      // --- wire UI
+      document.getElementById('join').onclick = () => {
+        const room = document.getElementById('room').value.trim() || 'demo-room-1';
+        const url  = document.getElementById('signalUrl').value.trim();
+        if (!url) return alert('Enter signaling URL');
+        connect(url, room); logChat(`Joining room: ${room}`);
+      };
+      document.getElementById('send').onclick = () => {
+        const el = document.getElementById('chatInput'); const text = el.value.trim();
+        if (!text) return; broadcast({ type:'chat', text }); logChat(`[me] ${text}`); el.value = '';
+      };
+      document.getElementById('announce').onclick = () => {
+        const el = document.getElementById('fileHash'); const hash = el.value.trim();
+        if (!hash) return;
+        FILES.set(hash, new TextEncoder().encode(`Payload for ${hash} from web-client`));
+        broadcast({ type:'file-announce', hash }); logFile(`Announced: ${hash}`); el.value = '';
+      };
+      document.getElementById('fetch').onclick = () => {
+        const el = document.getElementById('fetchHash'); const hash = el.value.trim();
+        if (!hash) return; broadcast({ type:'file-req', hash }); logFile(`Requested: ${hash}`); el.value = '';
+      };
+    </script>
+  </body>
+</html>
+
