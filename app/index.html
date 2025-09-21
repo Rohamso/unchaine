@@ -52,6 +52,50 @@
     <script src="./renderer.js"></script>
 
     <script src="./renderer.js"></script>
+    <script>
+  // ... keep other code
+
+  document.getElementById('joinBtn').onclick = async () => {
+    let room = document.getElementById('room').value || 'demo-room-1'
+    room = room.trim().toLowerCase()             // normalize!
+    const url = document.getElementById('signalUrl').value.trim()
+    const turnUrl = document.getElementById('turn').value.trim()
+
+    log(`Connecting to signaling at ${url}…`)
+    ws = new WebSocket(url)
+
+    ws.onopen = () => {
+      log("Connected to signaling")
+      const joinMsg = JSON.stringify({ type: "join", room })
+      log(`SENDING JOIN: ${joinMsg}`)            // <-- new log
+      ws.send(joinMsg)
+    }
+
+    ws.onerror = (e) => log("Signaling error")
+    ws.onclose = () => log("Disconnected from signaling")
+
+    ws.onmessage = async (ev) => {
+      const msg = JSON.parse(ev.data)
+      log(`RECV: ${ev.data}`)                    // <-- shows server replies
+      if (msg.type === "peers") {
+        for (const peerId of msg.peers) startPeer(peerId, true, turnUrl)
+      } else if (msg.type === "new-peer") {
+        startPeer(msg.id, false, turnUrl)
+      } else if (msg.type === "signal") {
+        const peer = peers[msg.from]
+        if (peer) {
+          await peer.pc.setRemoteDescription(new RTCSessionDescription(msg.data))
+          if (msg.data.type === "offer") {
+            const answer = await peer.pc.createAnswer()
+            await peer.pc.setLocalDescription(answer)
+            ws.send(JSON.stringify({ type: "signal", target: msg.from, data: peer.pc.localDescription }))
+          }
+        }
+      }
+    }
+  }
+</script>
+
   </body>
 </html>
 
