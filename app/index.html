@@ -109,8 +109,17 @@
       p.on('data', (data) => {
         const u8 = normalizeToU8(data);
         let text = '';
-        try { text = dec.decode(u8); } 
-        catch { log(`${peerId}: [binary ${u8.byteLength}B]`); return; }
+        let decodeFailed = false;
+        try {
+          text = dec.decode(u8);
+        } catch {
+          decodeFailed = true;
+        }
+
+        if (decodeFailed) {
+          log(`${peerId}: [binary ${u8.byteLength}B]`);
+          return;
+        }
 
         // Try to parse JSON (Electron sends JSON bytes: {type:'chat', text})
         try {
