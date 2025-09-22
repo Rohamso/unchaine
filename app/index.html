@@ -1,87 +1,84 @@
 <!doctype html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <title>P2P Demo</title>
-    <style>
-      body { font: 14px system-ui, sans-serif; margin: 16px; max-width: 900px }
-      .row { display:flex; gap:8px; margin:8px 0 }
-      input[type="text"] { flex:1; padding:8px }
-      textarea { width:100%; height:140px; padding:8px }
-      .pill { padding:4px 8px; border-radius:999px; background:#eee }
-      button { padding:8px 12px; cursor:pointer }
-    </style>
-  </head>
-  <body>
-  <h1>P2P Web Client</h1>
+<head>
+  <meta charset="utf-8"/>
+  <title>P2P Web Client</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body { font:14px system-ui, sans-serif; margin:16px; max-width:900px }
+    input { padding:8px; width:100%; max-width:520px; margin:4px 0 }
+    textarea { width:100%; height:160px; padding:8px; }
+    button { padding:8px 12px; margin-right:6px }
+  </style>
+</head>
+<body>
+  <h2>P2P Web Client</h2>
 
-  <label>Room: <input id="room" value="demo-room-1"></label><br/>
-  <label>Signaling URL: <input id="signalUrl" value="wss://signal.yourdomain.com"></label><br/>
-  <label>TURN (optional): <input id="turn" placeholder="turn:turn.yourdomain.com:3478"></label><br/>
-  <button id="joinBtn">Join</button>
-  <button id="leaveBtn">Leave</button>
+  <label>Room
+    <input id="room" value="demo-room-1"/>
+  </label>
+  <label>Signaling URL
+    <input id="signalUrl" value="wss://signal.yourdomain.com"/>
+  </label>
+  <label>TURN (optional)
+    <input id="turn" placeholder="turn:turn.yourdomain.com:3478"/>
+  </label>
+  <div>
+    <button id="joinBtn">Join</button>
+    <button id="leaveBtn">Leave</button>
+  </div>
 
-  <h2>Chat</h2>
-  <textarea id="chatLog" readonly style="width:100%;height:150px"></textarea><br/>
-  <input id="chatMsg" placeholder="Type message">
+  <h3>Chat</h3>
+  <textarea id="log" readonly></textarea><br/>
+  <input id="msg" placeholder="Type message…"/>
   <button id="sendBtn">Send</button>
 
-  <!-- SimplePeer (browser build) -->
   <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
   <script>
-    // --- state
-    const peers = new Map();               // peerId -> SimplePeer
-    let ws = null;
+    // ---- helpers
     const enc = new TextEncoder();
     const dec = new TextDecoder();
+    const logBox = document.getElementById('log');
+    function log(s){ logBox.value += s + '\n'; logBox.scrollTop = logBox.scrollHeight }
 
-      function normalizeToUint8(data) {
-        if (data instanceof Uint8Array) return data;
-        if (data instanceof ArrayBuffer) return new Uint8Array(data);
-        if (typeof data === 'string') return enc.encode(data);
-        if (data && data.data instanceof ArrayBuffer) return new Uint8Array(data.data);
-        try { return enc.encode(String(data)) } catch { return new Uint8Array(); }
-      }
-    
-    // --- helpers
-    const chatLog = document.getElementById('chatLog');
-    const log = (s) => { chatLog.value += s + '\n'; chatLog.scrollTop = chatLog.scrollHeight; };
-
-    function iceServers() {
-      const turn = document.getElementById('turn').value.trim();
-      const servers = [{ urls: ['stun:stun.l.google.com:19302'] }];
-      if (turn) servers.push({ urls: [turn], username: 'demoUser', credential: 'demoPass_ChangeMe' });
-      return servers;
+    function normalizeToU8(d){
+      if (d instanceof Uint8Array) return d;
+      if (d instanceof ArrayBuffer) return new Uint8Array(d);
+      if (d && d.data instanceof ArrayBuffer) return new Uint8Array(d.data);
+      if (typeof d === 'string') return enc.encode(d);
+      try { return enc.encode(String(d)) } catch { return new Uint8Array() }
     }
 
-    // --- signaling connect
+    // ---- state
+    let ws = null;
+    const peers = new Map(); // id -> SimplePeer
+
+    function getIce(){
+      const t = document.getElementById('turn').value.trim();
+      const ice = [{ urls: ['stun:stun.l.google.com:19302'] }];
+      if (t) ice.push({ urls:[t], username:'demoUser', credential:'demoPass_ChangeMe' });
+      return ice;
+    }
+
+    // ---- signaling
     document.getElementById('joinBtn').onclick = () => {
       let room = (document.getElementById('room').value || 'demo-room-1').trim().toLowerCase();
       const url  = document.getElementById('signalUrl').value.trim();
       if (!url) return alert('Enter signaling URL');
 
-      log(`Connecting to signaling ${url}…`);
+      log(`Connecting to signaling: ${url}`);
       ws = new WebSocket(url);
-
-      ws.onopen = () => {
-        log('Connected to signaling');
-        ws.send(JSON.stringify({ type: 'join', room }));
-        log(`SENT JOIN for "${room}"`);
-      };
+      ws.onopen = () => { log('Connected to signaling'); ws.send(JSON.stringify({type:'join', room})); };
       ws.onerror = () => log('Signaling error');
       ws.onclose = () => log('Disconnected from signaling');
 
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
-
         if (msg.type === 'peers') {
-          // We are the newcomer: initiate to existing peers
           for (const pid of msg.peers) startPeer(pid, true);
         } else if (msg.type === 'new-peer') {
-          // A newcomer arrived: we will be the responder
           startPeer(msg.id, false);
         } else if (msg.type === 'signal') {
-          // Forward SDP/ICE to SimplePeer
           const p = peers.get(msg.from) || startPeer(msg.from, false);
           p.signal(msg.data);
         }
@@ -90,59 +87,47 @@
 
     document.getElementById('leaveBtn').onclick = () => {
       try { ws && ws.close(); } catch {}
-      for (const [, p] of peers) { try { p.destroy(); } catch {} }
+      for (const [,p] of peers) { try { p.destroy(); } catch {} }
       peers.clear();
       log('Left room');
     };
 
-    // --- create a SimplePeer and wire events
-    function startPeer(peerId, initiator) {
-  if (peers.has(peerId)) return peers.get(peerId);
+    // ---- peer
+    function startPeer(peerId, initiator){
+      if (peers.has(peerId)) return peers.get(peerId);
 
-  const p = new SimplePeer({
-    initiator,
-    trickle: false,
-    config: { iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] }
-  });
-  peers.set(peerId, p);
+      const p = new SimplePeer({ initiator, trickle:false, config:{ iceServers: getIce() } });
+      peers.set(peerId, p);
 
-  p.on('signal', data => ws?.send(JSON.stringify({ type:'signal', target:peerId, data })));
-  p.on('connect', () => log(`Connected to ${peerId}`));
-  p.on('close',   () => { peers.delete(peerId); log(`Closed ${peerId}`); });
-  p.on('error',   err => log(`Peer error (${peerId}): ${err.message}`));
+      p.on('signal', data => ws?.send(JSON.stringify({type:'signal', target:peerId, data})));
+      p.on('connect', () => log(`Connected to ${peerId}`));
+      p.on('close',   () => { peers.delete(peerId); log(`Closed ${peerId}`) });
+      p.on('error',   (e) => log(`Peer error (${peerId}): ${e.message}`));
 
-  // >>> This is the key bit: decode bytes and parse JSON
-  p.on('data', (data) => {
-    const u8 = normalizeToUint8(data);
-    let text = '';
-    try { text = dec.decode(u8); } catch { log(`${peerId}: [binary ${u8.byteLength}B]`); return; }
+      // SINGLE receive handler: decode bytes -> text -> JSON
+      p.on('data', (data) => {
+        const u8 = normalizeToU8(data);
+        let text = '';
+        try { text = dec.decode(u8); } catch { log(`${peerId}: [binary ${u8.byteLength}B]`); return; }
+        try {
+          const obj = JSON.parse(text);
+          if (obj && obj.type === 'chat') { log(`${peerId}: ${obj.text}`); return; }
+        } catch {}
+        log(`${peerId}: ${text}`);
+      });
 
-    try {
-      const obj = JSON.parse(text);
-      if (obj && obj.type === 'chat') {
-        log(`${peerId}: ${obj.text}`);
-        return;
-      }
-    } catch { /* not JSON */ }
-
-    // Fallback: plain text
-    log(`${peerId}: ${text}`);
-  });
-
-  return p;
+      return p;
     }
 
-    // --- send chat as JSON bytes (what Electron expects)
+    // ---- send
     document.getElementById('sendBtn').onclick = () => {
-      const text = document.getElementById('chatMsg').value;
+      const text = document.getElementById('msg').value;
       if (!text) return;
-      const payload = enc.encode(JSON.stringify({ type: 'chat', text }));
-      for (const [, p] of peers) { try { p.send(payload); } catch {} }
+      const payload = enc.encode(JSON.stringify({ type:'chat', text }));
+      for (const [,p] of peers) { try { p.send(payload); } catch {} }
       log(`Me: ${text}`);
-      document.getElementById('chatMsg').value = '';
+      document.getElementById('msg').value = '';
     };
   </script>
 </body>
-
 </html>
-
