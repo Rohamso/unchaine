@@ -105,14 +105,23 @@
       p.on('error',   (e) => log(`Peer error (${peerId}): ${e.message}`));
 
       // SINGLE receive handler: decode bytes -> text -> JSON
+      // SINGLE receive handler: decode bytes -> text -> JSON
       p.on('data', (data) => {
         const u8 = normalizeToU8(data);
         let text = '';
-        try { text = dec.decode(u8); } catch { log(`${peerId}: [binary ${u8.byteLength}B]`); return; }
+        try { text = dec.decode(u8); } 
+        catch { log(`${peerId}: [binary ${u8.byteLength}B]`); return; }
+
+        // Try to parse JSON (Electron sends JSON bytes: {type:'chat', text})
         try {
           const obj = JSON.parse(text);
-          if (obj && obj.type === 'chat') { log(`${peerId}: ${obj.text}`); return; }
-        } catch {}
+          if (obj && obj.type === 'chat') {
+            log(`${peerId}: ${obj.text}`);
+            return;
+          }
+        } catch { /* not JSON; fall through */ }
+
+        // Plain text fallback
         log(`${peerId}: ${text}`);
       });
 
