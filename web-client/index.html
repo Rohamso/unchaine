@@ -5,18 +5,23 @@
   <title>Messages</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    :root{
-      --bg:#f5f5f7; --panel:#ffffff; --text:#111; --muted:#6b7280;
-      --me:#0b84ff; --me-text:#fff; --them:#e9e9eb; --them-text:#111;
-      --border:#e5e7eb; --accent:#0b84ff;
-    }
-    *{box-sizing:border-box}
-    html,body{height:100%;margin:0}
-    body{font:16px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--text);background:var(--bg);}
-    .app{height:100%;display:flex;flex-direction:column}
-    .statusbar{padding:10px 12px;color:var(--muted);font-size:14px}
-    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bbb;margin-right:6px;vertical-align:middle}
-    .dot.on{background:#10b981}
+    :root{ --bg:#f5f5f7; --panel:#ffffff; --text:#111; --muted:#6b7280;
+           --me:#0b84ff; --me-text:#fff; --them:#e9e9eb; --them-text:#111;
+           --bar:#f8f8fb; --border:#e5e7eb; --accent:#0b84ff; }
+    *{box-sizing:border-box} html,body{height:100%;margin:0}
+    body{font:16px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--text);background:var(--bg)}
+    .app{display:flex;flex-direction:column;height:100%}
+    .top{position:sticky;top:0;z-index:10;background:var(--bar);border-bottom:1px solid var(--border)}
+    .top-inner{max-width:900px;margin:0 auto;padding:10px 12px;display:flex;align-items:center;gap:8px}
+    .title{font-weight:600;margin-right:auto}
+    .status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
+    .dot{width:8px;height:8px;border-radius:50%;background:#bbb}.dot.on{background:#10b981}
+    .controls{max-width:900px;margin:0 auto;padding:8px 12px;display:grid;
+      grid-template-columns:1fr 1.2fr .7fr auto; gap:8px; border-top:1px solid var(--border); background:var(--panel)}
+    .controls input{padding:10px;border:1px solid var(--border);border-radius:10px}
+    .controls button{padding:10px 14px;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:10px;cursor:pointer}
+    .controls button.secondary{background:#fff;color:var(--accent)}
+    .hidden{display:none!important}
     .wrap{max-width:900px;margin:0 auto;flex:1;display:flex;flex-direction:column}
     .msgs{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
     .row{display:flex;gap:8px;align-items:flex-end}
@@ -28,11 +33,27 @@
     .inputbar{padding:10px 12px;border-top:1px solid var(--border);background:var(--panel);display:flex;gap:8px}
     .inputbar textarea{flex:1;resize:none;max-height:140px;min-height:42px;padding:10px 12px;border:1px solid var(--border);border-radius:20px;outline:none}
     .send{padding:10px 16px;border:none;background:var(--accent);color:#fff;border-radius:18px;cursor:pointer}
+    .badge{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+    @media (max-width:700px){ .controls{grid-template-columns:1fr} }
   </style>
 </head>
 <body>
 <div class="app">
-  <div class="statusbar"><span id="dot" class="dot"></span><span id="status">Connecting…</span></div>
+  <div class="top">
+    <div class="top-inner">
+      <div class="title">Messages</div>
+      <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">Disconnected</span></div>
+      <button id="toggleCfg" class="badge" title="Show/Hide settings">Settings</button>
+    </div>
+    <div id="cfg" class="controls">
+      <input id="room" placeholder="Room" value="demo-room-1"/>
+      <input id="signalUrl" placeholder="wss://signal.unchaine.com" value="wss://signal.unchaine.com"/>
+      <input id="turn" placeholder="TURN (optional): turn:turn.yourdomain.com:3478"/>
+      <button id="joinBtn">Join</button>
+      <button id="leaveBtn" class="secondary">Leave</button>
+    </div>
+  </div>
+
   <div class="wrap">
     <div id="msgs" class="msgs"></div>
     <div class="inputbar">
@@ -42,28 +63,18 @@
   </div>
 </div>
 
-<!-- SimplePeer -->
 <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
 <script>
-  // ======== EDIT THESE DEFAULTS IF YOU WANT ========
-  const SIGNAL_URL = "wss://signal.unchaine.com";
-  const ROOM       = "demo-room-1";
-  const TURN_URL   = ""; // e.g. "turn:turn.yourdomain.com:3478" (optional)
-  // =================================================
-
-  // state
-  let ws=null;
-  const peers=new Map(); // id -> SimplePeer
+  // --- state
+  let ws=null, joined=false;
+  const peers=new Map();                 // peerId -> SimplePeer
   const enc=new TextEncoder(), dec=new TextDecoder();
-
-  // ui
-  const dot=document.getElementById('dot');
-  const status=document.getElementById('status');
+  const statusDot=document.getElementById('statusDot');
+  const statusText=document.getElementById('statusText');
   const msgsEl=document.getElementById('msgs');
   const input=document.getElementById('msg');
-  const sendBtn=document.getElementById('sendBtn');
 
-  function setStatus(txt, on){ status.textContent=txt; dot.classList.toggle('on', !!on) }
+  // --- ui helpers
   function pad(n){return n<10?'0'+n:''+n}
   function tsLabel(ts){const d=new Date(ts??Date.now());return `${pad(d.getHours())}:${pad(d.getMinutes())}`}
   function bubble({self,text,ts}){
@@ -73,13 +84,46 @@
     if(self){ row.appendChild(b); row.appendChild(meta);} else { row.appendChild(meta); row.appendChild(b); }
     msgsEl.appendChild(row); msgsEl.scrollTop=msgsEl.scrollHeight;
   }
+  function setStatus(on){ statusDot.classList.toggle('on',!!on); statusText.textContent=on?'Connected':'Disconnected' }
+  document.getElementById('toggleCfg').onclick=()=>document.getElementById('cfg').classList.toggle('hidden');
 
-  function iceServers(){ const arr=[{urls:['stun:stun.l.google.com:19302']}]; if(TURN_URL) arr.push({urls:[TURN_URL],username:'demoUser',credential:'demoPass_ChangeMe'}); return arr; }
-  function toU8(d){ if(d instanceof Uint8Array) return d; if(d instanceof ArrayBuffer) return new Uint8Array(d); if(d&&d.data instanceof ArrayBuffer) return new Uint8Array(d.data); if(typeof d==='string') return enc.encode(d); try{return enc.encode(String(d))}catch{return new Uint8Array()} }
+  // --- join/leave (same behavior as the app)
+  document.getElementById('joinBtn').onclick=()=>{
+    if(joined) return;
+    let room=(document.getElementById('room').value||'demo-room-1').trim().toLowerCase();
+    const url=document.getElementById('signalUrl').value.trim();
+    const turn=document.getElementById('turn').value.trim();
+    if(!url) return alert('Enter signaling URL');
 
-  function startPeer(peerId, initiator){
+    ws=new WebSocket(url);
+    ws.onopen=()=>{ setStatus(true); ws.send(JSON.stringify({type:'join',room})); document.getElementById('cfg').classList.add('hidden'); };
+    ws.onerror=()=> setStatus(false);
+    ws.onclose=()=>{ setStatus(false); joined=false; };
+
+    ws.onmessage=(ev)=>{
+      const msg=JSON.parse(ev.data);
+      if(msg.type==='peers'){ joined=true; for(const pid of msg.peers) startPeer(pid,true,turn); }
+      else if(msg.type==='new-peer'){ startPeer(msg.id,false,turn); }
+      else if(msg.type==='signal'){ const p=peers.get(msg.from)||startPeer(msg.from,false,turn); p.signal(msg.data); }
+    };
+  };
+
+  document.getElementById('leaveBtn').onclick=()=>{
+    try{ ws&&ws.close(); }catch{}
+    for(const [,p] of peers){ try{ p.destroy(); }catch{} }
+    peers.clear(); setStatus(false); joined=false;
+    bubble({self:false,text:'You left the room',ts:Date.now()});
+  };
+
+  // --- webrtc
+  function iceServers(turn){ const arr=[{urls:['stun:stun.l.google.com:19302']}]; if(turn) arr.push({urls:[turn],username:'demoUser',credential:'demoPass_ChangeMe'}); return arr; }
+  function toU8(d){ if(d instanceof Uint8Array) return d; if(d instanceof ArrayBuffer) return new Uint8Array(d);
+                    if(d&&d.data instanceof ArrayBuffer) return new Uint8Array(d.data);
+                    if(typeof d==='string') return enc.encode(d); try{return enc.encode(String(d))}catch{return new Uint8Array()} }
+
+  function startPeer(peerId, initiator, turn){
     if(peers.has(peerId)) return peers.get(peerId);
-    const p=new SimplePeer({ initiator, trickle:false, config:{ iceServers: iceServers() }});
+    const p=new SimplePeer({ initiator, trickle:false, config:{ iceServers: iceServers(turn) }});
     peers.set(peerId,p);
 
     p.on('signal', data=> ws?.send(JSON.stringify({type:'signal', target:peerId, data})));
@@ -87,6 +131,7 @@
     p.on('close', ()=>{ peers.delete(peerId); bubble({self:false,text:`Closed ${peerId}`,ts:Date.now()}); });
     p.on('error', e=> bubble({self:false,text:`Peer error: ${e.message}`,ts:Date.now()}));
 
+    // Single receive handler: decode bytes → text → JSON
     p.on('data', (data)=>{
       const u8=toU8(data);
       let text='';
@@ -98,29 +143,15 @@
     return p;
   }
 
+  // --- send
   function sendCurrent(){
     const text=input.value.trim(); if(!text) return;
     const payload=enc.encode(JSON.stringify({type:'chat',text,ts:Date.now()}));
     for(const [,p] of peers){ try{ p.send(payload); }catch{} }
     bubble({self:true,text,ts:Date.now()}); input.value='';
   }
-  sendBtn.onclick=sendCurrent;
-  input.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendCurrent(); }});
-
-  // connect immediately
-  (function connect(){
-    setStatus("Connecting…", false);
-    ws=new WebSocket(SIGNAL_URL);
-    ws.onopen=()=>{ setStatus("Connected", true); ws.send(JSON.stringify({type:'join', room: ROOM.trim().toLowerCase()})); };
-    ws.onerror=()=> setStatus("Error", false);
-    ws.onclose=()=> setStatus("Disconnected", false);
-    ws.onmessage=(ev)=>{
-      const msg=JSON.parse(ev.data);
-      if(msg.type==='peers'){ for(const pid of msg.peers) startPeer(pid,true); }
-      else if(msg.type==='new-peer'){ startPeer(msg.id,false); }
-      else if(msg.type==='signal'){ (peers.get(msg.from)||startPeer(msg.from,false)).signal(msg.data); }
-    };
-  })();
+  document.getElementById('sendBtn').onclick=sendCurrent;
+  input.addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendCurrent(); }});
 </script>
 </body>
 </html>
