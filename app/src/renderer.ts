@@ -1,153 +1,148 @@
-// Loaded via <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js">
-declare const SimplePeer: any
+// app/src/renderer.ts
+type AnyWS = WebSocket;
 
-type PeerMap = Map<string, any>
-const peers: PeerMap = new Map()
-let ws: WebSocket | null = null
-let selfId = ''
-let joined = false
+declare const SimplePeer: any; // from CDN
+const enc = new TextEncoder();
+const dec = new TextDecoder();
 
-// Simple in-memory "files"
-const FILES = new Map<string, Uint8Array>() // key/hash -> payload
+// UI refs
+const statusDot = document.getElementById('statusDot') as HTMLElement;
+const statusText = document.getElementById('statusText') as HTMLElement;
+const cfg = document.getElementById('cfg') as HTMLElement;
+const toggleCfg = document.getElementById('toggleCfg') as HTMLButtonElement;
+const msgsEl = document.getElementById('msgs') as HTMLElement;
+const input = document.getElementById('msg') as HTMLTextAreaElement;
 
-// UI helpers
-const chatLog = document.getElementById('chatLog') as HTMLTextAreaElement
-const filesLog = document.getElementById('files') as HTMLTextAreaElement
-function logChat(s: string) { chatLog.value += s + '\n'; chatLog.scrollTop = chatLog.scrollHeight }
-function logFile(s: string) { filesLog.value += s + '\n'; filesLog.scrollTop = filesLog.scrollHeight }
+const joinBtn = document.getElementById('joinBtn') as HTMLButtonElement;
+const leaveBtn = document.getElementById('leaveBtn') as HTMLButtonElement;
+const sendBtn = document.getElementById('sendBtn') as HTMLButtonElement;
 
-function getIceServers() {
-  const turn = (document.getElementById('turn') as HTMLInputElement)?.value?.trim()
-  const user = (document.getElementById('turnUser') as HTMLInputElement)?.value?.trim() || 'user'
-  const pass = (document.getElementById('turnPass') as HTMLInputElement)?.value?.trim() || 'pass'
-  const servers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }]
-  if (turn) servers.push({ urls: [turn], username: user, credential: pass })
-  return servers
+const roomEl = document.getElementById('room') as HTMLInputElement;
+const signalUrlEl = document.getElementById('signalUrl') as HTMLInputElement;
+const turnEl = document.getElementById('turn') as HTMLInputElement;
+
+let ws: AnyWS | null = null;
+const peers = new Map<string, any>();
+let joined = false;
+
+function setStatus(connected: boolean) {
+  statusDot.classList.toggle('on', !!connected);
+  statusText.textContent = connected ? 'Connected' : 'Disconnected';
 }
 
-// ---------- signaling ----------
-function connectToSignaling(url: string, room: string) {
-  ws = new WebSocket(url)
+function pad(n: number) { return n < 10 ? '0' + n : '' + n }
+function tsLabel(ts?: number) {
+  const d = ts ? new Date(ts) : new Date();
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function bubble({ self, text, ts }: { self: boolean; text: string; ts?: number }) {
+  const row = document.createElement('div');
+  row.className = 'row ' + (self ? 'me' : 'them');
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = tsLabel(ts);
 
-  ws.onopen = () => {
-    ws!.send(JSON.stringify({ type: 'join', room }))
+  if (self) {
+    row.appendChild(b);
+    row.appendChild(meta);
+  } else {
+    row.appendChild(meta);
+    row.appendChild(b);
   }
-
-  ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data)
-
-    if (msg.type === 'peers') {
-      selfId = msg.self
-      ;(document.getElementById('self') as HTMLElement).innerText = selfId
-      for (const pid of msg.peers) startPeer(pid, true) // initiate to existing peers
-    } else if (msg.type === 'new-peer') {
-      startPeer(msg.id, false) // wait/respond to the newcomer
-    } else if (msg.type === 'signal') {
-      let p = peers.get(msg.from)
-      if (!p) {
-        // If a signal arrived before we created a peer, become responder
-        p = startPeer(msg.from, false)
-      }
-      p.signal(msg.data)
-    } else if (msg.type === 'peer-left') {
-      const p = peers.get(msg.id)
-      if (p) { p.destroy(); peers.delete(msg.id) }
-      logChat(`Peer left: ${msg.id}`)
-    }
-  }
-
-  ws.onclose = () => logChat('Disconnected from signaling server.')
+  msgsEl.appendChild(row);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
 }
 
-// ---------- WebRTC peers ----------
-function startPeer(peerId: string, initiator: boolean) {
-  if (peers.has(peerId)) return peers.get(peerId)
+function iceServers(turnUrl: string) {
+  const arr = [{ urls: ['stun:stun.l.google.com:19302'] }];
+  if (turnUrl) arr.push({ urls: [turnUrl], username: 'demoUser', credential: 'demoPass_ChangeMe' });
+  return arr;
+}
 
+function toU8(d: any): Uint8Array {
+  if (d instanceof Uint8Array) return d;
+  if (d instanceof ArrayBuffer) return new Uint8Array(d);
+  if (d && d.data instanceof ArrayBuffer) return new Uint8Array(d.data);
+  if (typeof d === 'string') return enc.encode(d);
+  try { return enc.encode(String(d)); } catch { return new Uint8Array(); }
+}
+
+function startPeer(peerId: string, initiator: boolean, turnUrl: string) {
+  if (peers.has(peerId)) return peers.get(peerId);
   const p = new SimplePeer({
     initiator,
-    trickle: false, // simpler offer/answer flow for demos
-    config: { iceServers: getIceServers() }
-  })
-  peers.set(peerId, p)
+    trickle: false,
+    config: { iceServers: iceServers(turnUrl) }
+  });
+  peers.set(peerId, p);
 
-  p.on('signal', (data: any) => {
-    ws?.send(JSON.stringify({ type: 'signal', target: peerId, data }))
-  })
-  p.on('connect', () => logChat(`Connected to ${peerId}`))
-  p.on('close', () => { peers.delete(peerId); logChat(`Closed ${peerId}`) })
-  p.on('error', (err: any) => logChat(`Peer error (${peerId}): ${err.message}`))
+  p.on('signal', (data: any) => { ws?.send(JSON.stringify({ type: 'signal', target: peerId, data })); });
+  p.on('connect', () => bubble({ self: false, text: `Connected to ${peerId}`, ts: Date.now() }));
+  p.on('close', () => { peers.delete(peerId); bubble({ self: false, text: `Closed ${peerId}`, ts: Date.now() }); });
+  p.on('error', (e: any) => bubble({ self: false, text: `Peer error: ${e.message}`, ts: Date.now() }));
 
-  p.on('data', (buf: Uint8Array) => {
+  p.on('data', (data: any) => {
+    const u8 = toU8(data);
+    let text = '';
+    try { text = dec.decode(u8); } catch { bubble({ self: false, text: `[binary ${u8.byteLength}B]`, ts: Date.now() }); return; }
     try {
-      const msg = JSON.parse(new TextDecoder().decode(buf))
-      if (msg.type === 'chat') logChat(`[${peerId}] ${msg.text}`)
-      if (msg.type === 'file-announce') logFile(`Announced by ${peerId}: ${msg.hash}`)
-      if (msg.type === 'file-req') {
-        const data = FILES.get(msg.hash)
-        if (data) {
-          const out = JSON.stringify({ type: 'file-data', hash: msg.hash, data: Array.from(data) })
-          p.send(new TextEncoder().encode(out))
-        }
-      }
-      if (msg.type === 'file-data') {
-        const u8 = new Uint8Array(msg.data)
-        logFile(`Received ${msg.hash}: ${new TextDecoder().decode(u8)}`)
-      }
-    } catch {
-      // ignore bad JSON
+      const obj = JSON.parse(text);
+      if (obj && obj.type === 'chat') { bubble({ self: false, text: obj.text, ts: obj.ts }); return; }
+    } catch { /* not JSON */ }
+    bubble({ self: false, text, ts: Date.now() });
+  });
+
+  return p;
+}
+
+toggleCfg.addEventListener('click', () => { cfg.classList.toggle('hidden'); });
+
+joinBtn.addEventListener('click', () => {
+  if (joined) return;
+  let room = (roomEl.value || 'demo-room-1').trim().toLowerCase();
+  const url = (signalUrlEl.value || '').trim();
+  const turn = (turnEl.value || '').trim();
+  if (!url) { alert('Enter signaling URL'); return; }
+
+  ws = new WebSocket(url);
+  ws.onopen = () => { setStatus(true); ws!.send(JSON.stringify({ type: 'join', room })); cfg.classList.add('hidden'); };
+  ws.onerror = () => { setStatus(false); };
+  ws.onclose = () => { setStatus(false); joined = false; };
+
+  ws.onmessage = (ev: MessageEvent) => {
+    const msg = JSON.parse(String(ev.data));
+    if (msg.type === 'peers') {
+      joined = true;
+      for (const pid of msg.peers) startPeer(pid, true, turn);
+    } else if (msg.type === 'new-peer') {
+      startPeer(msg.id, false, turn);
+    } else if (msg.type === 'signal') {
+      const p = peers.get(msg.from) || startPeer(msg.from, false, turn);
+      p.signal(msg.data);
     }
-  })
+  };
+});
 
-  return p
+leaveBtn.addEventListener('click', () => {
+  try { ws?.close(); } catch {}
+  for (const [, p] of peers) { try { p.destroy(); } catch {} }
+  peers.clear();
+  setStatus(false); joined = false;
+  bubble({ self: false, text: 'You left the room', ts: Date.now() });
+});
+
+function sendCurrent() {
+  const text = input.value.trim();
+  if (!text) return;
+  const payload = enc.encode(JSON.stringify({ type: 'chat', text, ts: Date.now() }));
+  for (const [, p] of peers) { try { p.send(payload); } catch {} }
+  bubble({ self: true, text, ts: Date.now() });
+  input.value = '';
 }
-
-function broadcast(obj: any) {
-  const data = new TextEncoder().encode(JSON.stringify(obj))
-  for (const [, p] of peers) { try { p.send(data) } catch { /* ignore */ } }
-}
-
-// ---------- wire up UI ----------
-window.addEventListener('DOMContentLoaded', () => {
-  ;(document.getElementById('signalUrl') as HTMLInputElement).value = 'ws://YOUR_MAC_LAN_IP:8080'
-  ;(document.getElementById('turn') as HTMLInputElement).value = 'turn:YOUR_MAC_LAN_IP:3478'
-  ;(document.getElementById('turnUser') as HTMLInputElement).value = 'user'
-  ;(document.getElementById('turnPass') as HTMLInputElement).value = 'pass'
-
-  document.getElementById('join')!.addEventListener('click', () => {
-    if (joined) { logChat('Already joined.'); return }
-    const room = (document.getElementById('room') as HTMLInputElement).value.trim() || 'demo-room-1'
-    const url  = (document.getElementById('signalUrl') as HTMLInputElement).value.trim()
-    if (!url) { alert('Enter signaling server URL'); return }
-    joined = true
-    connectToSignaling(url, room)
-    logChat(`Joining room: ${room}`)
-  })
-
-  document.getElementById('send')!.addEventListener('click', () => {
-    const input = (document.getElementById('chatInput') as HTMLInputElement)
-    const text = input.value.trim()
-    if (!text) return
-    broadcast({ type: 'chat', text })
-    logChat(`[me] ${text}`)
-    input.value = ''
-  })
-
-  document.getElementById('announce')!.addEventListener('click', () => {
-    const input = (document.getElementById('fileHash') as HTMLInputElement)
-    const hash = input.value.trim()
-    if (!hash) return
-    FILES.set(hash, new TextEncoder().encode(`Payload for ${hash} from ${selfId || 'desktop'}`))
-    broadcast({ type: 'file-announce', hash })
-    logFile(`Announced: ${hash}`)
-    input.value = ''
-  })
-
-  document.getElementById('fetch')!.addEventListener('click', () => {
-    const input = (document.getElementById('fetchHash') as HTMLInputElement)
-    const hash = input.value.trim()
-    if (!hash) return
-    broadcast({ type: 'file-req', hash })
-    logFile(`Requested: ${hash}`)
-    input.value = ''
-  })
-})
+sendBtn.addEventListener('click', sendCurrent);
+input.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCurrent(); }
+});
