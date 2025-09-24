@@ -4,9 +4,80 @@
   <meta charset="UTF-8" />
   <title>P2P Web Client</title>
   <style>
-    body { font-family: sans-serif; margin: 2em; }
+    .meta {
+      font-size: 11px;
+      color: #888;
+      margin-top: 2px;
+      text-align: right;
+      user-select: none;
+    }
+    .inputbar {
+      padding: 10px 12px;
+      border-top: 1px solid #e5e7eb;
+      background: #fff;
+      display: flex;
+      gap: 8px;
+    }
+    .inputbar textarea {
+      flex: 1;
+      resize: none;
+      min-height: 42px;
+      padding: 10px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 20px;
+      outline: none;
+    }
+    .send {
+      padding: 10px 16px;
+      border: none;
+      background: #0b84ff;
+      color: #fff;
+      border-radius: 18px;
+      cursor: pointer;
+    }
+    .bubble {
+      max-width: 72%;
+      padding: 10px 12px;
+      border-radius: 18px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .me .bubble {
+      background: #0b84ff;    /* iMessage blue */
+      color: #fff;
+      border-bottom-right-radius: 6px;
+    }
+    .them .bubble {
+      background: #e9e9eb;    /* iMessage gray */
+      color: #111;
+      border-bottom-left-radius: 6px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .row.me {
+      justify-content: flex-end;
+    }
+    body {
+      font: 16px -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      color: #111;
+      background: #f5f5f7; /* iMessage-style background */
+      margin: 2em;
+    }
     label { display: block; margin-top: 1em; }
     textarea { width: 100%; height: 150px; }
+
+    .msgs {
+      flex: 1;
+      overflow: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
   </style>
 </head>
 <body>
@@ -31,18 +102,34 @@
   <button id="leaveBtn">Leave</button>
 
   <h2>Chat</h2>
-  <textarea id="chatLog" readonly></textarea><br>
-  <input id="chatMsg" placeholder="Type message">
-  <button id="sendBtn">Send</button>
+  <div class="msgs" id="msgs"></div>
+  <div class="inputbar">
+    <textarea id="chatMsg" placeholder="Type message"></textarea>
+    <button id="sendBtn" class="send">Send</button>
+  </div>
 
   <script>
     let ws, pc, dc;
 
-    const log = (msg) => {
-      const box = document.getElementById('chatLog');
-      box.value += msg + "\n";
-      box.scrollTop = box.scrollHeight;
-    };
+    // Bubble rendering with timestamp
+    const msgsEl = document.getElementById('msgs');
+    function bubble({self, text, ts}) {
+      const row = document.createElement('div');
+      row.className = 'row ' + (self ? 'me' : 'them');
+
+      const b = document.createElement('div');
+      b.className = 'bubble';
+      b.textContent = text;
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = ts ? ts : new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      b.appendChild(meta);
+
+      row.appendChild(b);
+      msgsEl.appendChild(row);
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+    }
 
     document.getElementById('joinBtn').onclick = async () => {
       const room = document.getElementById('room').value;
@@ -92,13 +179,15 @@
     };
 
     document.getElementById('sendBtn').onclick = () => {
-      const msg = document.getElementById('chatMsg').value;
+      const msg = document.getElementById('chatMsg').value.trim();
+      if (!msg) return;
       for (const peer of Object.values(peers)) {
         if (peer.dc && peer.dc.readyState === "open") {
           peer.dc.send(msg);
         }
       }
-      log("Me: " + msg);
+  bubble({self:true, text:msg, ts:Date.now()});
+      document.getElementById('chatMsg').value = '';
     };
 
     let peers = {};
@@ -109,9 +198,9 @@
       }
 
       const pc = new RTCPeerConnection(config);
-      const dc = pc.createDataChannel("chat");
-      dc.onmessage = (e) => log(peerId + ": " + e.data);
-      dc.onopen = () => log("Connected to " + peerId);
+  const dc = pc.createDataChannel("chat");
+  dc.onmessage = (e) => bubble({self:false, text:e.data, ts:Date.now()});
+  dc.onopen = () => bubble({self:false, text:`Connected to ${peerId}`, ts:new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})});
 
       pc.onicecandidate = (e) => {
         if (e.candidate) return;
