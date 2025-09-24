@@ -1,376 +1,126 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>P2P Web Client</title>
+  <meta charset="utf-8"/>
+  <title>Messages</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    .meta {
-      font-size: 11px;
-      color: #888;
-      margin-top: 2px;
-      text-align: right;
-      user-select: none;
+    :root{
+      --bg:#f5f5f7; --panel:#ffffff; --text:#111; --muted:#6b7280;
+      --me:#0b84ff; --me-text:#fff; --them:#e9e9eb; --them-text:#111;
+      --border:#e5e7eb; --accent:#0b84ff;
     }
-    .inputbar {
-      padding: 10px 12px;
-      border-top: 1px solid #e5e7eb;
-      background: #fff;
-      display: flex;
-      gap: 8px;
-    }
-    .inputbar textarea {
-      flex: 1;
-      resize: none;
-      min-height: 42px;
-      padding: 10px 12px;
-      border: 1px solid #e5e7eb;
-      border-radius: 20px;
-      outline: none;
-    }
-    .send {
-      padding: 10px 16px;
-      border: none;
-      background: #0b84ff;
-      color: #fff;
-      border-radius: 18px;
-      cursor: pointer;
-    }
-    .bubble {
-      max-width: 72%;
-      padding: 10px 12px;
-      border-radius: 18px;
-      line-height: 1.35;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-    }
-    .me .bubble {
-      background: #0b84ff;    /* iMessage blue */
-      color: #fff;
-      border-bottom-right-radius: 6px;
-    }
-    .them .bubble {
-      background: #e9e9eb;    /* iMessage gray */
-      color: #111;
-      border-bottom-left-radius: 6px;
-    }
-    .row {
-      display: flex;
-      gap: 8px;
-      align-items: flex-end;
-    }
-    .row.me {
-      justify-content: flex-end;
-    }
-    body {
-      font: 16px -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      color: #111;
-      background: #f5f5f7; /* iMessage-style background */
-      margin: 2em;
-    }
-    label { display: block; margin-top: 1em; }
-    textarea { width: 100%; height: 150px; }
-
-    .msgs {
-      flex: 1;
-      overflow: auto;
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{font:16px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--text);background:var(--bg);}
+    .app{height:100%;display:flex;flex-direction:column}
+    .statusbar{padding:10px 12px;color:var(--muted);font-size:14px}
+    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bbb;margin-right:6px;vertical-align:middle}
+    .dot.on{background:#10b981}
+    .wrap{max-width:900px;margin:0 auto;flex:1;display:flex;flex-direction:column}
+    .msgs{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+    .row{display:flex;gap:8px;align-items:flex-end}
+    .row.me{justify-content:flex-end}
+    .bubble{max-width:min(72%,560px);padding:10px 12px;border-radius:18px;line-height:1.35;white-space:pre-wrap;word-wrap:break-word}
+    .me .bubble{background:var(--me);color:var(--me-text);border-bottom-right-radius:6px}
+    .them .bubble{background:var(--them);color:var(--them-text);border-bottom-left-radius:6px}
+    .meta{font-size:12px;color:var(--muted);margin:0 6px}
+    .inputbar{padding:10px 12px;border-top:1px solid var(--border);background:var(--panel);display:flex;gap:8px}
+    .inputbar textarea{flex:1;resize:none;max-height:140px;min-height:42px;padding:10px 12px;border:1px solid var(--border);border-radius:20px;outline:none}
+    .send{padding:10px 16px;border:none;background:var(--accent);color:#fff;border-radius:18px;cursor:pointer}
   </style>
 </head>
 <body>
-  <h1>P2P Web Client</h1>
-
-  <label>
-    Room:
-    <input id="room" value="demo-room-1">
-  </label>
-
-  <label>
-    Signaling URL:
-    <input id="signalUrl" value="wss://signal.yourdomain.com">
-  </label>
-
-  <label>
-    TURN (optional):
-    <input id="turn" placeholder="turn:turn.yourdomain.com:3478">
-  </label>
-
-  <button id="joinBtn">Join</button>
-  <button id="leaveBtn">Leave</button>
-
-  <h2>Chat</h2>
-  <div class="msgs" id="msgs"></div>
-  <div class="inputbar">
-    <textarea id="chatMsg" placeholder="Type message"></textarea>
-    <button id="sendBtn" class="send">Send</button>
+<div class="app">
+  <div class="statusbar"><span id="dot" class="dot"></span><span id="status">Connecting…</span></div>
+  <div class="wrap">
+    <div id="msgs" class="msgs"></div>
+    <div class="inputbar">
+      <textarea id="msg" placeholder="iMessage…"></textarea>
+      <button id="sendBtn" class="send">Send</button>
+    </div>
   </div>
+</div>
 
-  <script>
-    let ws, pc, dc;
+<!-- SimplePeer -->
+<script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+<script>
+  // ======== EDIT THESE DEFAULTS IF YOU WANT ========
+  const SIGNAL_URL = "wss://signal.unchaine.com";
+  const ROOM       = "demo-room-1";
+  const TURN_URL   = ""; // e.g. "turn:turn.yourdomain.com:3478" (optional)
+  // =================================================
 
-    // Bubble rendering with timestamp
-    const msgsEl = document.getElementById('msgs');
-    function bubble({self, text, ts}) {
-      const row = document.createElement('div');
-      row.className = 'row ' + (self ? 'me' : 'them');
+  // state
+  let ws=null;
+  const peers=new Map(); // id -> SimplePeer
+  const enc=new TextEncoder(), dec=new TextDecoder();
 
-      const b = document.createElement('div');
-      b.className = 'bubble';
-      b.textContent = text;
+  // ui
+  const dot=document.getElementById('dot');
+  const status=document.getElementById('status');
+  const msgsEl=document.getElementById('msgs');
+  const input=document.getElementById('msg');
+  const sendBtn=document.getElementById('sendBtn');
 
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      meta.textContent = ts ? ts : new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-      b.appendChild(meta);
+  function setStatus(txt, on){ status.textContent=txt; dot.classList.toggle('on', !!on) }
+  function pad(n){return n<10?'0'+n:''+n}
+  function tsLabel(ts){const d=new Date(ts??Date.now());return `${pad(d.getHours())}:${pad(d.getMinutes())}`}
+  function bubble({self,text,ts}){
+    const row=document.createElement('div'); row.className='row '+(self?'me':'them');
+    const b=document.createElement('div'); b.className='bubble'; b.textContent=text;
+    const meta=document.createElement('div'); meta.className='meta'; meta.textContent=tsLabel(ts);
+    if(self){ row.appendChild(b); row.appendChild(meta);} else { row.appendChild(meta); row.appendChild(b); }
+    msgsEl.appendChild(row); msgsEl.scrollTop=msgsEl.scrollHeight;
+  }
 
-      row.appendChild(b);
-      msgsEl.appendChild(row);
-      msgsEl.scrollTop = msgsEl.scrollHeight;
-    }
+  function iceServers(){ const arr=[{urls:['stun:stun.l.google.com:19302']}]; if(TURN_URL) arr.push({urls:[TURN_URL],username:'demoUser',credential:'demoPass_ChangeMe'}); return arr; }
+  function toU8(d){ if(d instanceof Uint8Array) return d; if(d instanceof ArrayBuffer) return new Uint8Array(d); if(d&&d.data instanceof ArrayBuffer) return new Uint8Array(d.data); if(typeof d==='string') return enc.encode(d); try{return enc.encode(String(d))}catch{return new Uint8Array()} }
 
-    document.getElementById('joinBtn').onclick = async () => {
-      const room = document.getElementById('room').value;
-      const url = document.getElementById('signalUrl').value;
-      const turnUrl = document.getElementById('turn').value;
+  function startPeer(peerId, initiator){
+    if(peers.has(peerId)) return peers.get(peerId);
+    const p=new SimplePeer({ initiator, trickle:false, config:{ iceServers: iceServers() }});
+    peers.set(peerId,p);
 
-      log("Connecting to signaling...");
-      ws = new WebSocket(url);
+    p.on('signal', data=> ws?.send(JSON.stringify({type:'signal', target:peerId, data})));
+    p.on('connect', ()=> bubble({self:false,text:`Connected to ${peerId}`,ts:Date.now()}));
+    p.on('close', ()=>{ peers.delete(peerId); bubble({self:false,text:`Closed ${peerId}`,ts:Date.now()}); });
+    p.on('error', e=> bubble({self:false,text:`Peer error: ${e.message}`,ts:Date.now()}));
 
-      ws.onopen = () => {
-        log("Connected to signaling");
-        ws.send(JSON.stringify({ type: "join", room }));
-      };
+    p.on('data', (data)=>{
+      const u8=toU8(data);
+      let text='';
+      try{ text=dec.decode(u8); }catch{ bubble({self:false,text:`[binary ${u8.byteLength}B]`,ts:Date.now()}); return; }
+      try{ const obj=JSON.parse(text); if(obj&&obj.type==='chat'){ bubble({self:false,text:obj.text,ts:obj.ts}); return; } }catch{}
+      bubble({self:false,text,ts:Date.now()});
+    });
 
-      ws.onerror = (e) => log("Signaling error: " + e.message);
-      ws.onclose = () => log("Disconnected from signaling");
+    return p;
+  }
 
-      ws.onmessage = async (ev) => {
-        const msg = JSON.parse(ev.data);
+  function sendCurrent(){
+    const text=input.value.trim(); if(!text) return;
+    const payload=enc.encode(JSON.stringify({type:'chat',text,ts:Date.now()}));
+    for(const [,p] of peers){ try{ p.send(payload); }catch{} }
+    bubble({self:true,text,ts:Date.now()}); input.value='';
+  }
+  sendBtn.onclick=sendCurrent;
+  input.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendCurrent(); }});
 
-        if (msg.type === "peers") {
-          const self = msg.self;
-          for (const peerId of msg.peers) {
-            startPeer(peerId, true, turnUrl);
-          }
-        } else if (msg.type === "new-peer") {
-          startPeer(msg.id, false, turnUrl);
-        } else if (msg.type === "signal") {
-          const peer = peers[msg.from];
-          if (peer) {
-            await peer.pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-            if (msg.data.type === "offer") {
-              const answer = await peer.pc.createAnswer();
-              await peer.pc.setLocalDescription(answer);
-              ws.send(JSON.stringify({ type: "signal", target: msg.from, data: peer.pc.localDescription }));
-            }
-          }
-        }
-      };
+  // connect immediately
+  (function connect(){
+    setStatus("Connecting…", false);
+    ws=new WebSocket(SIGNAL_URL);
+    ws.onopen=()=>{ setStatus("Connected", true); ws.send(JSON.stringify({type:'join', room: ROOM.trim().toLowerCase()})); };
+    ws.onerror=()=> setStatus("Error", false);
+    ws.onclose=()=> setStatus("Disconnected", false);
+    ws.onmessage=(ev)=>{
+      const msg=JSON.parse(ev.data);
+      if(msg.type==='peers'){ for(const pid of msg.peers) startPeer(pid,true); }
+      else if(msg.type==='new-peer'){ startPeer(msg.id,false); }
+      else if(msg.type==='signal'){ (peers.get(msg.from)||startPeer(msg.from,false)).signal(msg.data); }
     };
-
-    document.getElementById('leaveBtn').onclick = () => {
-      if (ws) ws.close();
-      Object.values(peers).forEach(p => p.pc.close());
-      peers = {};
-      log("Left room");
-    };
-
-    document.getElementById('sendBtn').onclick = () => {
-      const msg = document.getElementById('chatMsg').value.trim();
-      if (!msg) return;
-      for (const peer of Object.values(peers)) {
-        if (peer.dc && peer.dc.readyState === "open") {
-          peer.dc.send(msg);
-        }
-      }
-  bubble({self:true, text:msg, ts:Date.now()});
-      document.getElementById('chatMsg').value = '';
-    };
-
-    let peers = {};
-    function startPeer(peerId, initiator, turnUrl) {
-      const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-      if (turnUrl) {
-        config.iceServers.push({ urls: turnUrl, username: "demoUser", credential: "demoPass_ChangeMe" });
-      }
-
-      const pc = new RTCPeerConnection(config);
-  const dc = pc.createDataChannel("chat");
-  dc.onmessage = (e) => bubble({self:false, text:e.data, ts:Date.now()});
-  dc.onopen = () => bubble({self:false, text:`Connected to ${peerId}`, ts:new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})});
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) return;
-        ws.send(JSON.stringify({ type: "signal", target: peerId, data: pc.localDescription }));
-      };
-
-      peers[peerId] = { pc, dc };
-
-      if (initiator) {
-        pc.createOffer().then(offer => {
-          pc.setLocalDescription(offer);
-        });
-      }
-    }
-  </script>
+  })();
+</script>
 </body>
 </html>
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <title>P2P Web Client</title>
-    <style>
-      body { font:14px system-ui, sans-serif; margin:16px; max-width:900px }
-      .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap }
-      input[type="text"] { flex:1; min-width:240px; padding:8px }
-      textarea { width:100%; height:140px; padding:8px }
-      button { padding:8px 12px; cursor:pointer }
-      .pill { padding:4px 8px; border-radius:999px; background:#eee }
-    </style>
-    <!-- SimplePeer prebuilt (avoids bundling issues) -->
-    <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
-  </head>
-  <body>
-    <h2>P2P Web Client</h2>
-
-    <div class="row">
-      <input id="room" placeholder="Room (e.g., demo-room-1)"/>
-      <input id="signalUrl" placeholder="ws://YOUR_MAC_LAN_IP:8080"/>
-      <button id="join">Join</button>
-    </div>
-    <div class="row">
-      <input id="turn" placeholder="TURN (optional): turn:YOUR_MAC_LAN_IP:3478"/>
-      <input id="turnUser" placeholder="user"/>
-      <input id="turnPass" placeholder="pass"/>
-    </div>
-
-    <h3>Chat</h3>
-    <div class="row">
-      <input id="chatInput" placeholder="Type message…"/>
-      <button id="send">Send</button>
-    </div>
-    <textarea id="chatLog" readonly></textarea>
-
-    <h3>Files</h3>
-    <div class="row">
-      <input id="fileHash" placeholder="Announce key (hello:123)"/>
-      <button id="announce">Announce</button>
-    </div>
-    <div class="row">
-      <input id="fetchHash" placeholder="Fetch key (hello:123)"/>
-      <button id="fetch">Fetch</button>
-    </div>
-    <textarea id="files" readonly></textarea>
-
-    <script>
-      // --- state
-      const peers = new Map();
-      let ws = null, selfId = '';
-      const FILES = new Map();
-
-      // --- UI helpers
-      const chatLog = document.getElementById('chatLog');
-      const filesLog = document.getElementById('files');
-      const logChat = s => { chatLog.value += s + '\n'; chatLog.scrollTop = chatLog.scrollHeight };
-      const logFile = s => { filesLog.value += s + '\n'; filesLog.scrollTop = filesLog.scrollHeight };
-
-      // --- ICE servers (TURN optional)
-      function getIceServers() {
-        const turn = document.getElementById('turn').value.trim();
-        const user = document.getElementById('turnUser').value.trim() || 'user';
-        const pass = document.getElementById('turnPass').value.trim() || 'pass';
-        const servers = [{ urls: ['stun:stun.l.google.com:19302'] }];
-        if (turn) servers.push({ urls: [turn], username: user, credential: pass });
-        return servers;
-      }
-
-      // --- signaling
-      function connect(url, room) {
-        ws = new WebSocket(url);
-        ws.onopen = () => ws.send(JSON.stringify({ type:'join', room }));
-        ws.onmessage = ev => {
-          const msg = JSON.parse(ev.data);
-          if (msg.type === 'peers') {
-            selfId = msg.self;
-            msg.peers.forEach(pid => startPeer(pid, true));
-          } else if (msg.type === 'new-peer') {
-            startPeer(msg.id, false);
-          } else if (msg.type === 'signal') {
-            let p = peers.get(msg.from);
-            if (!p) p = startPeer(msg.from, false);
-            p.signal(msg.data);
-          } else if (msg.type === 'peer-left') {
-            const p = peers.get(msg.id);
-            if (p) { p.destroy(); peers.delete(msg.id); }
-            logChat(`Peer left: ${msg.id}`);
-          }
-        };
-        ws.onclose = () => logChat('Disconnected from signaling.');
-      }
-
-      // --- webrtc peer
-      function startPeer(id, initiator) {
-        if (peers.has(id)) return peers.get(id);
-        const p = new SimplePeer({ initiator, trickle:false, config:{ iceServers: getIceServers() } });
-        peers.set(id, p);
-        p.on('signal', data => ws?.send(JSON.stringify({ type:'signal', target:id, data })));
-        p.on('connect', () => logChat(`Connected to ${id}`));
-        p.on('close', () => { peers.delete(id); logChat(`Closed ${id}`); });
-        p.on('error', err => logChat(`Peer error (${id}): ${err.message}`));
-        p.on('data', buf => {
-          try {
-            const msg = JSON.parse(new TextDecoder().decode(buf));
-            if (msg.type === 'chat') logChat(`[${id}] ${msg.text}`);
-            if (msg.type === 'file-announce') logFile(`Announced by ${id}: ${msg.hash}`);
-            if (msg.type === 'file-req') {
-              const data = FILES.get(msg.hash);
-              if (data) {
-                const out = JSON.stringify({ type:'file-data', hash:msg.hash, data:[...data] });
-                p.send(new TextEncoder().encode(out));
-              }
-            }
-            if (msg.type === 'file-data') {
-              const u8 = new Uint8Array(msg.data);
-              logFile(`Received ${msg.hash}: ${new TextDecoder().decode(u8)}`);
-            }
-          } catch {}
-        });
-        return p;
-      }
-
-      // --- broadcast
-      function broadcast(obj) {
-        const data = new TextEncoder().encode(JSON.stringify(obj));
-        for (const [, p] of peers) { try { p.send(data) } catch {} }
-      }
-
-      // --- wire UI
-      document.getElementById('join').onclick = () => {
-        const room = document.getElementById('room').value.trim() || 'demo-room-1';
-        const url  = document.getElementById('signalUrl').value.trim();
-        if (!url) return alert('Enter signaling URL');
-        connect(url, room); logChat(`Joining room: ${room}`);
-      };
-      document.getElementById('send').onclick = () => {
-        const el = document.getElementById('chatInput'); const text = el.value.trim();
-        if (!text) return; broadcast({ type:'chat', text }); logChat(`[me] ${text}`); el.value = '';
-      };
-      document.getElementById('announce').onclick = () => {
-        const el = document.getElementById('fileHash'); const hash = el.value.trim();
-        if (!hash) return;
-        FILES.set(hash, new TextEncoder().encode(`Payload for ${hash} from web-client`));
-        broadcast({ type:'file-announce', hash }); logFile(`Announced: ${hash}`); el.value = '';
-      };
-      document.getElementById('fetch').onclick = () => {
-        const el = document.getElementById('fetchHash'); const hash = el.value.trim();
-        if (!hash) return; broadcast({ type:'file-req', hash }); logFile(`Requested: ${hash}`); el.value = '';
-      };
-    </script>
-  </body>
-</html>
-
