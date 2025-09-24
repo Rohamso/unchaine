@@ -2,150 +2,209 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>P2P Web Client</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Messages</title>
   <style>
-    body { font:14px system-ui, sans-serif; margin:16px; max-width:900px }
-    input { padding:8px; width:100%; max-width:520px; margin:4px 0 }
-    textarea { width:100%; height:160px; padding:8px; }
-    button { padding:8px 12px; margin-right:6px }
+    :root{
+      --bg:#f5f5f7; --panel:#ffffff; --text:#111; --muted:#6b7280;
+      --me:#0b84ff; --me-text:#fff; --them:#e9e9eb; --them-text:#111;
+      --bar:#f8f8fb; --border:#e5e7eb; --accent:#0b84ff;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{font:16px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--text);background:var(--bg);}
+    .app{display:flex;flex-direction:column; height:100%;}
+    .top{position:sticky;top:0;z-index:10;background:var(--bar);border-bottom:1px solid var(--border);}
+    .top-inner{max-width:900px;margin:0 auto;padding:10px 12px;display:flex;align-items:center;gap:8px}
+    .title{font-weight:600;margin-right:auto}
+    .status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
+    .dot{width:8px;height:8px;border-radius:50%;background:#bbb}
+    .dot.on{background:#10b981}
+    .controls{max-width:900px;margin:0 auto;padding:8px 12px;display:grid;grid-template-columns:1fr 1.2fr .7fr auto; gap:8px; border-top:1px solid var(--border); background:var(--panel)}
+    .controls input{padding:10px;border:1px solid var(--border);border-radius:10px}
+    .controls button{padding:10px 14px;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:10px;cursor:pointer}
+    .controls button.secondary{background:#fff;color:var(--accent)}
+    .hidden{display:none !important;}
+    .wrap{max-width:900px;margin:0 auto;flex:1; display:flex; flex-direction:column;}
+    .msgs{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+    .row{display:flex; gap:8px; align-items:flex-end}
+    .row.me{justify-content:flex-end}
+    .bubble{
+      max-width:min(72%, 560px);
+      padding:10px 12px;border-radius:18px; line-height:1.35; word-wrap:break-word; white-space:pre-wrap;
+      position:relative;
+    }
+    .me .bubble{background:var(--me);color:var(--me-text); border-bottom-right-radius:6px}
+    .them .bubble{background:var(--them);color:var(--them-text); border-bottom-left-radius:6px}
+    .meta{font-size:12px;color:var(--muted); margin:0 6px}
+    .inputbar{padding:10px 12px; border-top:1px solid var(--border); background:var(--panel); display:flex; gap:8px}
+    .inputbar textarea{flex:1; resize:none; max-height:140px; min-height:42px; padding:10px 12px;border:1px solid var(--border);border-radius:20px; outline:none}
+    .send{padding:10px 16px;border:none;background:var(--accent);color:#fff;border-radius:18px;cursor:pointer}
+    .badge{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+    @media (max-width:700px){
+      .controls{grid-template-columns:1fr; }
+    }
   </style>
 </head>
 <body>
-  <h2>P2P Web Client</h2>
-
-  <label>Room
-    <input id="room" value="demo-room-1"/>
-  </label>
-  <label>Signaling URL
-    <input id="signalUrl" value="wss://signal.yourdomain.com"/>
-  </label>
-  <label>TURN (optional)
-    <input id="turn" placeholder="turn:turn.yourdomain.com:3478"/>
-  </label>
-  <div>
-    <button id="joinBtn">Join</button>
-    <button id="leaveBtn">Leave</button>
+<div class="app">
+  <div class="top">
+    <div class="top-inner">
+      <div class="title">Messages</div>
+      <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">Disconnected</span></div>
+      <button id="toggleCfg" class="badge" title="Show/Hide connection settings">Settings</button>
+    </div>
+    <div id="cfg" class="controls">
+      <input id="room" placeholder="Room" value="demo-room-1"/>
+      <input id="signalUrl" placeholder="wss://signal.unchaine.com" value="wss://signal.unchaine.com"/>
+      <input id="turn" placeholder="TURN (optional): turn:turn.yourdomain.com:3478"/>
+      <button id="joinBtn">Join</button>
+      <button id="leaveBtn" class="secondary">Leave</button>
+    </div>
   </div>
 
-  <h3>Chat</h3>
-  <textarea id="log" readonly></textarea><br/>
-  <input id="msg" placeholder="Type message…"/>
-  <button id="sendBtn">Send</button>
+  <div class="wrap">
+    <div id="msgs" class="msgs"></div>
+    <div class="inputbar">
+      <textarea id="msg" placeholder="iMessage…"></textarea>
+      <button id="sendBtn" class="send">Send</button>
+    </div>
+  </div>
+</div>
 
-  <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
-  <script>
-    // ---- helpers
-    const enc = new TextEncoder();
-    const dec = new TextDecoder();
-    const logBox = document.getElementById('log');
-    function log(s){ logBox.value += s + '\n'; logBox.scrollTop = logBox.scrollHeight }
+<!-- SimplePeer -->
+<script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+<script>
+  // --- State
+  let ws=null, joined=false;
+  const peers = new Map();        // peerId -> SimplePeer
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
 
-    function normalizeToU8(d){
-      if (d instanceof Uint8Array) return d;
-      if (d instanceof ArrayBuffer) return new Uint8Array(d);
-      if (d && d.data instanceof ArrayBuffer) return new Uint8Array(d.data);
-      if (typeof d === 'string') return enc.encode(d);
-      try { return enc.encode(String(d)) } catch { return new Uint8Array() }
-    }
+  // --- UI helpers
+  const msgsEl = document.getElementById('msgs');
+  function pad(n){return n<10?'0'+n:n}
+  function tsLabel(ts){
+    const d = ts ? new Date(ts) : new Date();
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  function bubble({self,text,ts}){
+    const row = document.createElement('div');
+    row.className = 'row ' + (self?'me':'them');
+    const b = document.createElement('div');
+    b.className = 'bubble';
+    b.textContent = text;
+    row.appendChild(b);
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = tsLabel(ts);
+    if (self) row.appendChild(meta); else row.insertBefore(meta, b);
+    msgsEl.appendChild(row);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+  function setStatus(connected){
+    statusDot.classList.toggle('on', !!connected);
+    statusText.textContent = connected ? 'Connected' : 'Disconnected';
+  }
 
-    // ---- state
-    let ws = null;
-    const peers = new Map(); // id -> SimplePeer
+  // --- Config toggle
+  document.getElementById('toggleCfg').onclick = () => {
+    document.getElementById('cfg').classList.toggle('hidden');
+  };
 
-    function getIce(){
-      const t = document.getElementById('turn').value.trim();
-      const ice = [{ urls: ['stun:stun.l.google.com:19302'] }];
-      if (t) ice.push({ urls:[t], username:'demoUser', credential:'demoPass_ChangeMe' });
-      return ice;
-    }
+  // --- Connect / Leave
+  document.getElementById('joinBtn').onclick = () => {
+    if (joined) return;
+    let room = (document.getElementById('room').value || 'demo-room-1').trim().toLowerCase();
+    const url  = document.getElementById('signalUrl').value.trim();
+    const turn = document.getElementById('turn').value.trim();
 
-    // ---- signaling
-    document.getElementById('joinBtn').onclick = () => {
-      let room = (document.getElementById('room').value || 'demo-room-1').trim().toLowerCase();
-      const url  = document.getElementById('signalUrl').value.trim();
-      if (!url) return alert('Enter signaling URL');
-
-      log(`Connecting to signaling: ${url}`);
-      ws = new WebSocket(url);
-      ws.onopen = () => { log('Connected to signaling'); ws.send(JSON.stringify({type:'join', room})); };
-      ws.onerror = () => log('Signaling error');
-      ws.onclose = () => log('Disconnected from signaling');
-
-      ws.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'peers') {
-          for (const pid of msg.peers) startPeer(pid, true);
-        } else if (msg.type === 'new-peer') {
-          startPeer(msg.id, false);
-        } else if (msg.type === 'signal') {
-          const p = peers.get(msg.from) || startPeer(msg.from, false);
-          p.signal(msg.data);
-        }
-      };
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      setStatus(true);
+      ws.send(JSON.stringify({type:'join', room}));
+      document.getElementById('cfg').classList.add('hidden');
     };
+    ws.onerror = () => { setStatus(false); };
+    ws.onclose = () => { setStatus(false); joined=false; };
 
-    document.getElementById('leaveBtn').onclick = () => {
-      try { ws && ws.close(); } catch {}
-      for (const [,p] of peers) { try { p.destroy(); } catch {} }
-      peers.clear();
-      log('Left room');
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'peers') {
+        joined = true;
+        for (const pid of msg.peers) startPeer(pid, true, turn);
+      } else if (msg.type === 'new-peer') {
+        startPeer(msg.id, false, turn);
+      } else if (msg.type === 'signal') {
+        const p = peers.get(msg.from) || startPeer(msg.from, false, turn);
+        p.signal(msg.data);
+      }
     };
+  };
 
-    // ---- peer
-    function startPeer(peerId, initiator){
-      if (peers.has(peerId)) return peers.get(peerId);
+  document.getElementById('leaveBtn').onclick = () => {
+    try { ws && ws.close(); } catch {}
+    for (const [,p] of peers) { try { p.destroy(); } catch {} }
+    peers.clear();
+    setStatus(false); joined=false;
+    bubble({self:false,text:'You left the room',ts:Date.now()});
+  };
 
-      const p = new SimplePeer({ initiator, trickle:false, config:{ iceServers: getIce() } });
-      peers.set(peerId, p);
+  // --- SimplePeer wiring
+  function iceServers(turn){
+    const arr = [{ urls: ['stun:stun.l.google.com:19302'] }];
+    if (turn) arr.push({ urls:[turn], username:'demoUser', credential:'demoPass_ChangeMe' });
+    return arr;
+  }
+  function normalizeToU8(d){
+    if (d instanceof Uint8Array) return d;
+    if (d instanceof ArrayBuffer) return new Uint8Array(d);
+    if (d && d.data instanceof ArrayBuffer) return new Uint8Array(d.data);
+    if (typeof d === 'string') return enc.encode(d);
+    try { return enc.encode(String(d)) } catch { return new Uint8Array(); }
+  }
 
-      p.on('signal', data => ws?.send(JSON.stringify({type:'signal', target:peerId, data})));
-      p.on('connect', () => log(`Connected to ${peerId}`));
-      p.on('close',   () => { peers.delete(peerId); log(`Closed ${peerId}`) });
-      p.on('error',   (e) => log(`Peer error (${peerId}): ${e.message}`));
+  function startPeer(peerId, initiator, turn){
+    if (peers.has(peerId)) return peers.get(peerId);
+    const p = new SimplePeer({ initiator, trickle:false, config:{ iceServers: iceServers(turn) }});
+    peers.set(peerId, p);
 
-      // SINGLE receive handler: decode bytes -> text -> JSON
-      // SINGLE receive handler: decode bytes -> text -> JSON
-      p.on('data', (data) => {
-        const u8 = normalizeToU8(data);
-        let text = '';
-        let decodeFailed = false;
-        try {
-          text = dec.decode(u8);
-        } catch {
-          decodeFailed = true;
-        }
+    p.on('signal', data => ws?.send(JSON.stringify({type:'signal', target:peerId, data})));
+    p.on('connect', () => bubble({self:false,text:`Connected to ${peerId}`,ts:Date.now()}));
+    p.on('close',   () => { peers.delete(peerId); bubble({self:false,text:`Closed ${peerId}`,ts:Date.now()}); });
+    p.on('error',   e => bubble({self:false,text:`Peer error: ${e.message}`,ts:Date.now()}));
 
-        if (decodeFailed) {
-          log(`${peerId}: [binary ${u8.byteLength}B]`);
-          return;
-        }
+    // SINGLE receive handler: decode bytes -> text -> JSON
+    p.on('data', (data) => {
+      const u8 = normalizeToU8(data);
+      let text='';
+      try { text = dec.decode(u8); }
+      catch { bubble({self:false,text:`[binary ${u8.byteLength}B]`,ts:Date.now()}); return; }
+      try {
+        const obj = JSON.parse(text);
+        if (obj && obj.type === 'chat') { bubble({self:false,text:obj.text,ts:obj.ts}); return; }
+      } catch {}
+      bubble({self:false,text:text,ts:Date.now()});
+    });
 
-        // Try to parse JSON (Electron sends JSON bytes: {type:'chat', text})
-        try {
-          const obj = JSON.parse(text);
-          if (obj && obj.type === 'chat') {
-            log(`${peerId}: ${obj.text}`);
-            return;
-          }
-        } catch { /* not JSON; fall through */ }
+    return p;
+  }
 
-        // Plain text fallback
-        log(`${peerId}: ${text}`);
-      });
-
-      return p;
-    }
-
-    // ---- send
-    document.getElementById('sendBtn').onclick = () => {
-      const text = document.getElementById('msg').value;
-      if (!text) return;
-      const payload = enc.encode(JSON.stringify({ type:'chat', text }));
-      for (const [,p] of peers) { try { p.send(payload); } catch {} }
-      log(`Me: ${text}`);
-      document.getElementById('msg').value = '';
-    };
-  </script>
+  // --- Send message (JSON bytes)
+  const input = document.getElementById('msg');
+  function sendCurrent(){
+    const text = input.value.trim();
+    if (!text) return;
+    const payload = enc.encode(JSON.stringify({ type:'chat', text, ts: Date.now() }));
+    for (const [,p] of peers) { try { p.send(payload); } catch {} }
+    bubble({self:true,text,ts:Date.now()});
+    input.value='';
+  }
+  document.getElementById('sendBtn').onclick = sendCurrent;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendCurrent(); }
+  });
+</script>
 </body>
 </html>
