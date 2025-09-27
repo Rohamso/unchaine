@@ -5,6 +5,21 @@
   <title>Messages</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
+  /* message menu */
+  .msg-menu{
+    position:absolute; z-index:9999;
+    background:#fff; color:#111;
+    border:1px solid #e5e7eb; border-radius:10px;
+    box-shadow:0 10px 30px rgba(0,0,0,.08);
+    padding:6px; min-width:140px; display:none;
+  }
+  .msg-menu.open{ display:block; }
+  .msg-menu button{
+    display:block; width:100%; text-align:left;
+    background:transparent; border:0; padding:8px 10px; border-radius:8px; cursor:pointer;
+    font:inherit; color:inherit;
+  }
+  .msg-menu button:hover{ background:#f5f5f7; }
     :root{ --bg:#f5f5f7; --panel:#ffffff; --text:#111; --muted:#6b7280;
            --me:#0b84ff; --me-text:#fff; --them:#e9e9eb; --them-text:#111;
            --bar:#f8f8fb; --border:#e5e7eb; --accent:#0b84ff; }
@@ -57,7 +72,7 @@
   <div class="wrap">
     <div id="msgs" class="msgs"></div>
     <div class="inputbar">
-      <textarea id="msg" placeholder="iMessage…"></textarea>
+      <textarea id="msg" placeholder="Send a message"></textarea>
       <button id="sendBtn" class="send">Send</button>
     </div>
   </div>
@@ -65,10 +80,45 @@
 
 <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
 <script>
+// --- message menu helpers
+let openMenu; // ref to currently open menu
+
+function closeAnyMenu(){
+  if (openMenu) { openMenu.classList.remove('open'); openMenu.remove(); openMenu = null; }
+}
+document.addEventListener('click', (e)=> {
+  // close on outside click
+  if (openMenu && !openMenu.contains(e.target)) closeAnyMenu();
+});
+
+function showMessageMenu(anchorBtn, { text, offenderId, ts }) {
+  closeAnyMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'msg-menu';
+  const btn = document.createElement('button');
+  btn.textContent = 'Report';
+  btn.onclick = async () => {
+    closeAnyMenu();
+    // optional confirm
+    if (!confirm('Report this message?')) return;
+    await reportMessage({ text, offenderId, ts });
+    alert('Thanks—reported.');
+  };
+  menu.appendChild(btn);
+  document.body.appendChild(menu);
+
+  // position menu near the anchor button
+  const r = anchorBtn.getBoundingClientRect();
+  menu.style.left = `${window.scrollX + r.left - 10}px`;
+  menu.style.top  = `${window.scrollY + r.bottom + 6}px`;
+  menu.classList.add('open');
+  openMenu = menu;
+}
 // --- moderation helpers
 let bannedHashes = new Set();
 let myPeerId = null; // optional: set this if you expose your own id
-const SIGNAL_BASE = 'https://signal.unchaine.com'; // or http://127.0.0.1:8080 when local
+const SIGNAL_BASE = 'https://signal.unchaine.com'; // must be https
 
 async function fetchBannedHashes(){
   try {
@@ -125,28 +175,29 @@ window.addEventListener('load', fetchBannedHashes);
     }
   }
 
-  function renderIncomingMessage({ text, fromPeerId, ts }){
+  function renderIncomingMessage({ text, fromPeerId, ts }) {
     const row = document.createElement('div');
     row.className = 'row them';
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = new Date(ts || Date.now()).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
     bubble.textContent = text;
 
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = tsLabel(ts);
-
     const more = document.createElement('button');
     more.textContent = '⋯';
     more.style = 'border:none;background:transparent;color:#889;cursor:pointer;font-size:16px;';
-    more.title = 'Report message';
-    more.onclick = ()=> reportMessage({ text, offenderId: fromPeerId, ts });
+    more.title = 'More';
+    more.onclick = (ev) => {
+      ev.stopPropagation();
+      showMessageMenu(more, { text, offenderId: fromPeerId || 'unknown', ts });
+    };
 
-    row.appendChild(meta);
-    row.appendChild(bubble);
-    row.appendChild(more);
-    msgsEl.appendChild(row);
+    row.append(meta, bubble, more);
+    document.getElementById('msgs').appendChild(row);
     msgsEl.scrollTop = msgsEl.scrollHeight;
   }
   function setStatus(on){ statusDot.classList.toggle('on',!!on); statusText.textContent=on?'Connected':'Disconnected' }
@@ -231,6 +282,54 @@ window.addEventListener('load', fetchBannedHashes);
   }
   document.getElementById('sendBtn').onclick=sendCurrent;
   input.addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendCurrent(); }});
+</script>
+</script>
+<script>
+
+  // report API (reuses your existing reportMessage if present)
+  async function reportMessage({ text, offenderId='unknown', ts=Date.now() }){
+    const room = (document.getElementById('room')?.value || 'default').trim().toLowerCase();
+    const reporterId = 'web-'+Math.random().toString(36).slice(2);
+    const res = await fetch(`${SIGNAL_BASE}/report`, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ room, offenderId, reporterId, message: text, ts })
+    });
+    if(!res.ok){ alert('Report failed'); return; }
+    alert('Thanks—reported.');
+  }
+
+  // menu helpers
+  let openMenu = null;
+  function closeAnyMenu(){
+    if (openMenu){ openMenu.classList.remove('open'); openMenu.remove(); openMenu = null; }
+  }
+  document.addEventListener('click', (e)=>{
+    if (openMenu && !openMenu.contains(e.target)) closeAnyMenu();
+  });
+
+  function showMessageMenu(anchorBtn, { text, offenderId, ts }){
+    closeAnyMenu();
+    const menu = document.createElement('div');
+    menu.className = 'msg-menu';
+
+    const btn = document.createElement('button');
+    btn.textContent = 'Report';
+    btn.onclick = async () => {
+      closeAnyMenu();
+      if (!confirm('Report this message?')) return;
+      await reportMessage({ text, offenderId, ts });
+    };
+
+    menu.appendChild(btn);
+    document.body.appendChild(menu);
+
+    const r = anchorBtn.getBoundingClientRect();
+    menu.style.left = `${window.scrollX + r.left - 10}px`;
+    menu.style.top  = `${window.scrollY + r.bottom + 6}px`;
+    menu.classList.add('open');
+    openMenu = menu;
+  }
 </script>
 </body>
 </html>
