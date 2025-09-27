@@ -65,6 +65,42 @@
 
 <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
 <script>
+// --- moderation helpers
+let bannedHashes = new Set();
+let myPeerId = null; // optional: set this if you expose your own id
+const SIGNAL_BASE = 'https://signal.unchaine.com'; // or http://127.0.0.1:8080 when local
+
+async function fetchBannedHashes(){
+  try {
+    const txt = await fetch(`${SIGNAL_BASE}/banned-hashes`, { cache: 'no-store' }).then(r=>r.text());
+    bannedHashes = new Set(
+      txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean).filter(l=>!l.startsWith('#'))
+    );
+    console.log('Banned hashes loaded', bannedHashes.size);
+  } catch (e) { console.warn('banned-hashes fetch failed', e); }
+}
+
+async function sha256Hex(str){
+  const enc = new TextEncoder().encode(str);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+async function reportMessage({ text, offenderId='unknown', ts=Date.now() }){
+  const room = (document.getElementById('room')?.value || 'default').trim().toLowerCase();
+  const reporterId = myPeerId || ('web-'+Math.random().toString(36).slice(2));
+  try {
+    const res = await fetch(`${SIGNAL_BASE}/report`, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ room, offenderId, reporterId, message: text, ts })
+    });
+    const j = await res.json();
+    alert(j.ok ? 'Reported. Thank you.' : 'Report failed.');
+  } catch { alert('Report failed (network).'); }
+}
+
+window.addEventListener('load', fetchBannedHashes);
   // --- state
   let ws=null, joined=false;
   const peers=new Map();                 // peerId -> SimplePeer
@@ -77,12 +113,41 @@
   // --- ui helpers
   function pad(n){return n<10?'0'+n:''+n}
   function tsLabel(ts){const d=new Date(ts??Date.now());return `${pad(d.getHours())}:${pad(d.getMinutes())}`}
-  function bubble({self,text,ts}){
-    const row=document.createElement('div'); row.className='row '+(self?'me':'them');
-    const b=document.createElement('div'); b.className='bubble'; b.textContent=text;
-    const meta=document.createElement('div'); meta.className='meta'; meta.textContent=tsLabel(ts);
-    if(self){ row.appendChild(b); row.appendChild(meta);} else { row.appendChild(meta); row.appendChild(b); }
-    msgsEl.appendChild(row); msgsEl.scrollTop=msgsEl.scrollHeight;
+  function bubble({self,text,ts,fromPeerId}){
+    if(self){
+      const row=document.createElement('div'); row.className='row me';
+      const b=document.createElement('div'); b.className='bubble'; b.textContent=text;
+      const meta=document.createElement('div'); meta.className='meta'; meta.textContent=tsLabel(ts);
+      row.appendChild(b); row.appendChild(meta);
+      msgsEl.appendChild(row); msgsEl.scrollTop=msgsEl.scrollHeight;
+    }else{
+      renderIncomingMessage({text,fromPeerId,ts});
+    }
+  }
+
+  function renderIncomingMessage({ text, fromPeerId, ts }){
+    const row = document.createElement('div');
+    row.className = 'row them';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = tsLabel(ts);
+
+    const more = document.createElement('button');
+    more.textContent = '⋯';
+    more.style = 'border:none;background:transparent;color:#889;cursor:pointer;font-size:16px;';
+    more.title = 'Report message';
+    more.onclick = ()=> reportMessage({ text, offenderId: fromPeerId, ts });
+
+    row.appendChild(meta);
+    row.appendChild(bubble);
+    row.appendChild(more);
+    msgsEl.appendChild(row);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
   }
   function setStatus(on){ statusDot.classList.toggle('on',!!on); statusText.textContent=on?'Connected':'Disconnected' }
   document.getElementById('toggleCfg').onclick=()=>document.getElementById('cfg').classList.toggle('hidden');
@@ -136,8 +201,14 @@
       const u8=toU8(data);
       let text='';
       try{ text=dec.decode(u8); }catch{ bubble({self:false,text:`[binary ${u8.byteLength}B]`,ts:Date.now()}); return; }
-      try{ const obj=JSON.parse(text); if(obj&&obj.type==='chat'){ bubble({self:false,text:obj.text,ts:obj.ts}); return; } }catch{}
-      bubble({self:false,text,ts:Date.now()});
+      try{
+        const obj=JSON.parse(text);
+        if(obj&&obj.type==='chat'){
+          bubble({self:false,text:obj.text,ts:obj.ts,fromPeerId:'unknown'});
+          return;
+        }
+      }catch{}
+  bubble({self:false,text,ts:Date.now(),fromPeerId:'unknown'});
     });
 
     return p;
@@ -145,10 +216,18 @@
 
   // --- send
   function sendCurrent(){
-    const text=input.value.trim(); if(!text) return;
-    const payload=enc.encode(JSON.stringify({type:'chat',text,ts:Date.now()}));
-    for(const [,p] of peers){ try{ p.send(payload); }catch{} }
-    bubble({self:true,text,ts:Date.now()}); input.value='';
+    const text = input.value.trim();
+    if (!text) return;
+    sha256Hex(text).then(h => {
+      if (bannedHashes.has(h)) {
+        alert('This content is blocked by policy.');
+        return;
+      }
+      const payload = enc.encode(JSON.stringify({type:'chat',text,ts:Date.now()}));
+      for(const [,p] of peers){ try{ p.send(payload); }catch{} }
+      bubble({self:true,text,ts:Date.now()});
+      input.value='';
+    });
   }
   document.getElementById('sendBtn').onclick=sendCurrent;
   input.addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendCurrent(); }});
