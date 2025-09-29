@@ -66,6 +66,12 @@
       <input id="turn" placeholder="TURN (optional): turn:turn.yourdomain.com:3478"/>
       <button id="joinBtn">Join</button>
       <button id="leaveBtn" class="secondary">Leave</button>
+
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button id="createInviteBtn">Create Invite</button>
+        <input id="inviteLink" placeholder="Invite link will appear here" style="flex:1;">
+        <button id="copyInviteBtn">Copy</button>
+      </div>
     </div>
   </div>
 
@@ -283,7 +289,6 @@ window.addEventListener('load', fetchBannedHashes);
   document.getElementById('sendBtn').onclick=sendCurrent;
   input.addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendCurrent(); }});
 </script>
-</script>
 <script>
 
   // report API (reuses your existing reportMessage if present)
@@ -330,6 +335,76 @@ window.addEventListener('load', fetchBannedHashes);
     menu.classList.add('open');
     openMenu = menu;
   }
+</script>
+<script>
+// --- helpers: base64url <-> string
+function b64urlEncode(str) {
+  const b64 = btoa(str);
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/,'');
+}
+function b64urlDecode(b64url) {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+  return atob(b64 + pad);
+}
+// --- helpers: create/parse invite payload
+function makeInvitePayload({ room }) {
+  const payload = {
+    v: 1,
+    room: (room || '').trim().toLowerCase(),
+    n: Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b=>b.toString(16).padStart(2,'0')).join(''),
+    ts: Date.now()
+  };
+  return b64urlEncode(JSON.stringify(payload));
+}
+function parseInviteFromUrl(urlOrHash) {
+  try {
+    // supports "#invite=...." or "unchaine://join#...."
+    if (urlOrHash.includes('invite=')) {
+      const h = new URL(urlOrHash, location.origin).hash || urlOrHash;
+      const m = h.match(/invite=([^&]+)/);
+      if (!m) return null;
+      return JSON.parse(b64urlDecode(m[1]));
+    } else if (urlOrHash.includes('#')) {
+      const frag = urlOrHash.split('#')[1];
+      return JSON.parse(b64urlDecode(frag));
+    }
+  } catch (e) {
+    console.warn('Bad invite payload', e);
+  }
+  return null;
+}
+
+// --- invite UI wiring
+
+document.getElementById('createInviteBtn').onclick = () => {
+  const room = (document.getElementById('room').value || '').trim();
+  if (!room) { alert('Enter a room name first'); return; }
+  const token = makeInvitePayload({ room });
+  // Web share link (clickable today)
+  const webLink = `${location.origin}#invite=${token}`;
+  // Optional native-style link (for future custom protocol)
+  const appLink = `unchaine://join#${token}`;
+  document.getElementById('inviteLink').value = webLink; // pick one to show
+  // You can also show both if you like.
+};
+
+document.getElementById('copyInviteBtn').onclick = async () => {
+  const v = document.getElementById('inviteLink').value;
+  if (!v) return;
+  try { await navigator.clipboard.writeText(v); alert('Copied'); } catch { alert('Copy failed'); }
+};
+
+// Auto-join if page opened with #invite=...
+window.addEventListener('load', () => {
+  const payload = parseInviteFromUrl(location.href);
+  if (payload && payload.room) {
+    // Fill and auto-join
+    document.getElementById('room').value = payload.room;
+    // Optional: show a subtle “Joining via invite…” status
+    if (typeof join === 'function') join(); // call your existing join()
+  }
+});
 </script>
 </body>
 </html>

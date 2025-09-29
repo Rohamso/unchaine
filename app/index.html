@@ -6,6 +6,20 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://unpkg.com; connect-src * ws: wss:; img-src 'self' data:;"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
+  .msg-menu {
+    position: absolute; z-index: 9999;
+    background: #fff; color:#111;
+    border: 1px solid #e5e7eb; border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.08);
+    padding: 6px; min-width: 140px; display: none;
+  }
+  .msg-menu.open { display: block; }
+  .msg-menu button {
+    display:block; width:100%; text-align:left;
+    background:transparent; border:0; padding:8px 10px; border-radius:8px; cursor:pointer;
+    font: inherit; color: inherit;
+  }
+  .msg-menu button:hover { background:#f5f5f7; }
     :root{
       --bg:#f5f5f7; --panel:#ffffff; --text:#111; --muted:#6b7280;
       --me:#0b84ff; --me-text:#fff; --them:#e9e9eb; --them-text:#111;
@@ -60,12 +74,22 @@
       <button id="joinBtn">Join</button>
       <button id="leaveBtn" class="secondary">Leave</button>
     </div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <button id="createInviteBtn">Create Invite</button>
+      <input id="inviteLink" placeholder="Invite link" style="flex:1;">
+      <button id="copyInviteBtn">Copy</button>
+    </div>
+    <!-- OPTIONAL: a field to paste an invite link/token manually -->
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <input id="pasteInvite" placeholder="Paste invite link or token">
+      <button id="useInviteBtn">Use Invite</button>
+    </div>
   </div>
 
   <div class="wrap">
     <div id="msgs" class="msgs"></div>
     <div class="inputbar">
-      <textarea id="msg" placeholder="iMessage…"></textarea>
+      <textarea id="msg" placeholder="Send a message"></textarea>
       <button id="sendBtn" class="send">Send</button>
     </div>
   </div>

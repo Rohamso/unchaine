@@ -1,3 +1,98 @@
+// --- helpers: base64url <-> string
+function b64urlEncode(str: string): string {
+  const b64 = btoa(str);
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/,'');
+}
+function b64urlDecode(b64url: string): string {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+  return atob(b64 + pad);
+}
+
+// --- helpers: create/parse invite payload
+function makeInvitePayload({ room }: { room: string }): string {
+  const payload = {
+    v: 1,
+    room: (room || '').trim().toLowerCase(),
+    n: Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b=>b.toString(16).padStart(2,'0')).join(''),
+    ts: Date.now()
+  };
+  return b64urlEncode(JSON.stringify(payload));
+}
+
+function parseInviteFromUrl(urlOrHash: string): any {
+  try {
+    // supports "#invite=...." or "unchaine://join#...."
+    if (urlOrHash.includes('invite=')) {
+      const h = new URL(urlOrHash, location.origin).hash || urlOrHash;
+      const m = h.match(/invite=([^&]+)/);
+      if (!m) return null;
+      return JSON.parse(b64urlDecode(m[1]));
+    } else if (urlOrHash.includes('#')) {
+      const frag = urlOrHash.split('#')[1];
+      return JSON.parse(b64urlDecode(frag));
+    }
+  } catch (e) {
+    console.warn('Bad invite payload', e);
+  }
+  return null;
+}
+
+function renderIncomingMessage({ text, fromPeerId, ts }: { text: string, fromPeerId?: string, ts?: number }) {
+  const row = document.createElement('div');
+  row.className = 'row them';
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = new Date(ts || Date.now()).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
+
+  const more = document.createElement('button');
+  more.textContent = '⋯';
+  (more as any).style = 'border:none;background:transparent;color:#889;cursor:pointer;font-size:16px;';
+  more.title = 'More';
+  more.onclick = (ev) => {
+    ev.stopPropagation();
+    showMessageMenu(more, { text, offenderId: fromPeerId || 'unknown', ts });
+  };
+
+  row.append(meta, bubble, more);
+  document.getElementById('msgs')!.appendChild(row);
+}
+
+// --- message menu helpers
+let openMenu: HTMLElement | null;
+function closeAnyMenu() {
+  if (openMenu) { openMenu.classList.remove('open'); openMenu.remove(); openMenu = null; }
+}
+document.addEventListener('click', (e) => {
+  if (openMenu && !openMenu.contains(e.target as Node)) closeAnyMenu();
+});
+function showMessageMenu(anchorBtn: HTMLElement, { text, offenderId, ts }: { text: string, offenderId?: string, ts?: number }) {
+  closeAnyMenu();
+  const menu = document.createElement('div');
+  menu.className = 'msg-menu';
+  const btn = document.createElement('button');
+  btn.textContent = 'Report';
+  btn.onclick = async () => {
+    closeAnyMenu();
+    if (!confirm('Report this message?')) return;
+    await reportMessage({ text, offenderId, ts });
+    alert('Thanks—reported.');
+  };
+  menu.appendChild(btn);
+  document.body.appendChild(menu);
+  const r = anchorBtn.getBoundingClientRect();
+  menu.style.left = `${window.scrollX + r.left - 10}px`;
+  menu.style.top  = `${window.scrollY + r.bottom + 6}px`;
+  menu.classList.add('open');
+  openMenu = menu;
+}
+(window as any).showMessageMenu = showMessageMenu;
+(window as any).closeAnyMenu = closeAnyMenu;
 // --- moderation helpers
 let bannedHashes = new Set<string>();
 const SIGNAL_BASE = 'https://signal.unchaine.com'; // or http://127.0.0.1:8080 for local tests
@@ -93,6 +188,35 @@ function bubble({ self, text, ts, fromPeerId }: { self: boolean; text: string; t
     renderIncomingMessage(text, fromPeerId, ts);
   }
 }
+  // --- message menu helpers
+  let openMenu: HTMLElement | null;
+  function closeAnyMenu() {
+    if (openMenu) { openMenu.classList.remove('open'); openMenu.remove(); openMenu = null; }
+  }
+  document.addEventListener('click', (e) => {
+    if (openMenu && !openMenu.contains(e.target as Node)) closeAnyMenu();
+  });
+  function showMessageMenu(anchorBtn: HTMLElement, { text, offenderId, ts }: { text: string, offenderId?: string, ts?: number }) {
+    closeAnyMenu();
+    const menu = document.createElement('div');
+    menu.className = 'msg-menu';
+    const btn = document.createElement('button');
+    btn.textContent = 'Report';
+    btn.onclick = async () => {
+      closeAnyMenu();
+      if (!confirm('Report this message?')) return;
+      await reportMessage({ text, offenderId, ts });
+      alert('Thanks—reported.');
+    };
+    menu.appendChild(btn);
+    document.body.appendChild(menu);
+    const r = anchorBtn.getBoundingClientRect();
+    menu.style.left = `${window.scrollX + r.left - 10}px`;
+    menu.style.top  = `${window.scrollY + r.bottom + 6}px`;
+    menu.classList.add('open');
+    openMenu = menu;
+  }
+  (window as any).showMessageMenu = showMessageMenu;
 
 function renderIncomingMessage(text: string, fromPeerId?: string, ts?: number) {
   const row = document.createElement('div');
@@ -111,6 +235,10 @@ function renderIncomingMessage(text: string, fromPeerId?: string, ts?: number) {
   row.append(meta, bubble, more);
   (document.getElementById('msgs') as HTMLElement).appendChild(row);
   msgsEl.scrollTop = msgsEl.scrollHeight;
+    more.onclick = (ev) => {
+      ev.stopPropagation();
+      (window as any).showMessageMenu(more, { text, offenderId: fromPeerId || 'unknown', ts });
+    };
 }
 
 function iceServers(turnUrl: string) {
@@ -205,3 +333,118 @@ async function sendCurrent() {
 input.addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendCurrent(); }
 });
+
+function bindInviteUI() {
+  const roomEl = document.getElementById('room') as HTMLInputElement;
+  const createBtn = document.getElementById('createInviteBtn') as HTMLButtonElement;
+  const inviteLinkEl = document.getElementById('inviteLink') as HTMLInputElement;
+  const copyBtn = document.getElementById('copyInviteBtn') as HTMLButtonElement;
+  const pasteEl = document.getElementById('pasteInvite') as HTMLInputElement | null;
+  const useBtn = document.getElementById('useInviteBtn') as HTMLButtonElement | null;
+
+  // --- Invite popover helpers ---
+  let invitePopover: HTMLDivElement | null = null;
+  function closeInvitePopover() {
+    if (invitePopover) { invitePopover.remove(); invitePopover = null; }
+  }
+
+  createBtn.onclick = () => {
+    const room = (roomEl.value || '').trim();
+    if (!room) { alert('Enter a room name first'); return; }
+    const token = makeInvitePayload({ room });
+    const webLink = `https://unchaine.pages.dev/#invite=${token}`;
+    const appLink = `unchaine://join#${token}`;
+    const expiresIn = 30 * 60 * 1000; // 30 min in ms
+    const expiryText = 'Link expires in 30 min.';
+    closeInvitePopover();
+    invitePopover = document.createElement('div');
+    invitePopover.style.position = 'absolute';
+    invitePopover.style.zIndex = '9999';
+    invitePopover.style.background = '#fff';
+    invitePopover.style.border = '1px solid #e5e7eb';
+    invitePopover.style.borderRadius = '10px';
+    invitePopover.style.boxShadow = '0 10px 30px rgba(0,0,0,.08)';
+    invitePopover.style.padding = '16px';
+    invitePopover.style.minWidth = '320px';
+    invitePopover.style.top = (createBtn.getBoundingClientRect().bottom + window.scrollY + 8) + 'px';
+    invitePopover.style.left = (createBtn.getBoundingClientRect().left + window.scrollX) + 'px';
+    invitePopover.innerHTML = `
+      <div style="font-weight:600;margin-bottom:8px;">Share this invite</div>
+      <div style="margin-bottom:8px;word-break:break-all;">
+        <span style="font-size:13px;color:#888;">Web link:</span><br>
+        <input type='text' value='${webLink}' readonly style='width:100%;margin-bottom:6px;'>
+        <span style="font-size:13px;color:#888;">App link:</span><br>
+        <input type='text' value='${appLink}' readonly style='width:100%;'>
+      </div>
+      <div style="margin-bottom:8px;color:#666;font-size:13px;">${expiryText}</div>
+      <div style="display:flex;gap:8px;">
+        <button id="shareInviteBtn">Share</button>
+        <button id="copyWebInviteBtn">Copy Web Link</button>
+        <button id="copyAppInviteBtn">Copy App Link</button>
+        <button id="closeInvitePopoverBtn">Close</button>
+      </div>
+    `;
+    document.body.appendChild(invitePopover);
+    // Share button (uses Web Share API if available)
+    const shareBtn = invitePopover.querySelector('#shareInviteBtn') as HTMLButtonElement;
+    shareBtn.onclick = async () => {
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: 'Join my chat', text: 'Join my chat room:', url: webLink });
+        } catch {}
+      } else {
+        alert('Web Share not supported. Copy the link instead.');
+      }
+    };
+    // Copy buttons
+    (invitePopover.querySelector('#copyWebInviteBtn') as HTMLButtonElement).onclick = async () => {
+      try { await navigator.clipboard.writeText(webLink); alert('Copied'); } catch { alert('Copy failed'); }
+    };
+    (invitePopover.querySelector('#copyAppInviteBtn') as HTMLButtonElement).onclick = async () => {
+      try { await navigator.clipboard.writeText(appLink); alert('Copied'); } catch { alert('Copy failed'); }
+    };
+    (invitePopover.querySelector('#closeInvitePopoverBtn') as HTMLButtonElement).onclick = closeInvitePopover;
+    // Dismiss on outside click
+    setTimeout(() => {
+      document.addEventListener('mousedown', outsideClick, { once: true });
+      function outsideClick(e: MouseEvent) {
+        if (invitePopover && !invitePopover.contains(e.target as Node)) closeInvitePopover();
+      }
+    }, 0);
+  };
+
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteLinkEl.value);
+      alert('Copied');
+    } catch { alert('Copy failed'); }
+  };
+
+  if (useBtn && pasteEl) {
+    useBtn.onclick = () => {
+      const raw = (pasteEl.value || '').trim();
+      if (!raw) return;
+      const payload = parseInviteFromUrl(raw) || (() => {
+        // allow pasting just the token
+        try { return JSON.parse(b64urlDecode(raw)); } catch { return null; }
+      })();
+      if (payload && payload.room) {
+        roomEl.value = payload.room;
+        // call your existing join handler
+        if (typeof (window as any).join === 'function') (window as any).join();
+      } else {
+        alert('Invalid invite');
+      }
+    };
+  }
+
+  // Auto-handle if Electron opened with an URL-like arg (future: custom protocol)
+  // For now, we also parse location.hash if you load a webview-like wrapper.
+  const p = parseInviteFromUrl(location.href);
+  if (p?.room) {
+    roomEl.value = p.room;
+    if (typeof (window as any).join === 'function') (window as any).join();
+  }
+}
+
+window.addEventListener('DOMContentLoaded', bindInviteUI);
