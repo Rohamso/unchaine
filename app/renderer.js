@@ -25,6 +25,7 @@
   var INVITE_TTL_MS = 30 * 60 * 1e3;
   var PENDING_INVITES_STORE_KEY = "unch_pending_invites_v1";
   var USED_INVITES_STORE_KEY = "unch_used_invites_v1";
+  var CONSUMED_INVITES_STORE_KEY = "unch_consumed_invites_v1";
   var pendingInvites = /* @__PURE__ */ new Map();
   var usedInviteNonces = /* @__PURE__ */ new Set();
   var consumedInviteNonces = /* @__PURE__ */ new Set();
@@ -32,10 +33,12 @@
   loadPendingInvitesFromStorage();
   cleanupExpiredPendingInvites();
   loadUsedInviteNonces();
+  loadConsumedInviteNonces();
   async function makeInvitePayload({ room }) {
     const cleanRoom = (room || "").trim().toLowerCase();
     const nonce = randNonceHex(16);
     const exp = Date.now() + INVITE_TTL_MS;
+    const ts = Date.now();
     const keyPair = await crypto.subtle.generateKey(ALG, true, ["sign", "verify"]);
     const privJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
     const pubJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
@@ -47,13 +50,19 @@
     };
     pendingInvites.set(nonce, { room: cleanRoom, exp, privJwk, privKey: keyPair.privateKey });
     persistPendingInvites();
-    const payload = {
-      v: 2,
+    const payloadFields = {
       room: cleanRoom,
       nonce,
       exp,
-      ts: Date.now(),
+      ts,
       inviterPub: minimalPub
+    };
+    const sigBytes = await crypto.subtle.sign(SIG, keyPair.privateKey, inviteSignatureBytes(payloadFields));
+    const signature = b64urlEncodeBytes(new Uint8Array(sigBytes));
+    const payload = {
+      v: 2,
+      ...payloadFields,
+      sig: signature
     };
     return { token: b64urlEncode(JSON.stringify(payload)), payload };
   }
@@ -87,7 +96,7 @@
       const data = JSON.parse(json);
       if (!data || typeof data !== "object") return null;
       if (data.v !== 2) return null;
-      if (!data.room || !data.nonce || !data.exp || !data.inviterPub) return null;
+      if (!data.room || !data.nonce || !data.exp || !data.inviterPub || !data.sig) return null;
       return {
         v: 2,
         room: String(data.room || "").trim().toLowerCase(),
@@ -99,11 +108,38 @@
           crv: data.inviterPub.crv,
           x: data.inviterPub.x,
           y: data.inviterPub.y
-        }
+        },
+        sig: String(data.sig || "").trim()
       };
     } catch (err) {
       console.warn("Invalid invite JSON", err);
       return null;
+    }
+  }
+  function inviteSignatureBytes(payload) {
+    const canonical = JSON.stringify({
+      room: payload.room,
+      nonce: payload.nonce,
+      exp: payload.exp,
+      ts: payload.ts,
+      inviterPub: {
+        kty: payload.inviterPub.kty,
+        crv: payload.inviterPub.crv,
+        x: payload.inviterPub.x,
+        y: payload.inviterPub.y
+      }
+    });
+    return new TextEncoder().encode(canonical);
+  }
+  async function verifyInviteTokenSignature(payload) {
+    if (!payload.sig) return false;
+    try {
+      const pubKey = await crypto.subtle.importKey("jwk", payload.inviterPub, ALG, true, ["verify"]);
+      const sig = b64urlDecodeToBytes(payload.sig);
+      return await crypto.subtle.verify(SIG, pubKey, sig, inviteSignatureBytes(payload));
+    } catch (err) {
+      console.warn("Invite signature verification failed", err);
+      return false;
     }
   }
   function loadPendingInvitesFromStorage() {
@@ -164,12 +200,39 @@
       console.warn("Failed to persist used invites", err);
     }
   }
+  function loadConsumedInviteNonces() {
+    try {
+      const raw = localStorage.getItem(CONSUMED_INVITES_STORE_KEY);
+      if (!raw) return;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return;
+      for (const nonce of list) {
+        if (typeof nonce === "string") consumedInviteNonces.add(nonce);
+      }
+    } catch (err) {
+      console.warn("Failed to load consumed invites", err);
+    }
+  }
+  function persistConsumedInviteNonces() {
+    try {
+      localStorage.setItem(CONSUMED_INVITES_STORE_KEY, JSON.stringify(Array.from(consumedInviteNonces.values())));
+    } catch (err) {
+      console.warn("Failed to persist consumed invites", err);
+    }
+  }
   function markInviteNonceUsed(nonce) {
     usedInviteNonces.add(nonce);
     persistUsedInviteNonces();
   }
   function isInviteNonceUsed(nonce) {
     return usedInviteNonces.has(nonce);
+  }
+  function markInviteNonceConsumed(nonce) {
+    consumedInviteNonces.add(nonce);
+    persistConsumedInviteNonces();
+  }
+  function isInviteNonceConsumed(nonce) {
+    return consumedInviteNonces.has(nonce);
   }
   async function resolvePendingInvite(nonce) {
     const record = pendingInvites.get(nonce);
@@ -512,9 +575,18 @@
         invitePopover = null;
       }
     }
-    function applyInvite(payload, opts = {}) {
+    async function applyInvite(payload, opts = {}) {
+      const hasValidSignature = await verifyInviteTokenSignature(payload);
+      if (!hasValidSignature) {
+        alert("Invalid invite signature.");
+        return false;
+      }
       if (Date.now() > payload.exp) {
         alert("This invite has expired.");
+        return false;
+      }
+      if (isInviteNonceConsumed(payload.nonce)) {
+        alert("This invite has already been used.");
         return false;
       }
       if (isInviteNonceUsed(payload.nonce)) {
@@ -625,11 +697,11 @@
           alert("Invalid invite");
           return;
         }
-        applyInvite(payload, { autoJoin: true });
+        void applyInvite(payload, { autoJoin: true });
       };
     }
     const p = parseInviteFromUrl(location.href);
-    if (p) applyInvite(p, { autoJoin: true });
+    if (p) void applyInvite(p, { autoJoin: true });
   }
   var ALG = { name: "ECDSA", namedCurve: "P-256" };
   var SIG = { name: "ECDSA", hash: "SHA-256" };
@@ -671,7 +743,7 @@
       const room = String(msg.room || "").trim().toLowerCase();
       const record = await resolvePendingInvite(nonce);
       if (!record) {
-        if (consumedInviteNonces.has(nonce)) {
+        if (isInviteNonceConsumed(nonce)) {
           sendJson(peer, { type: "invite-handshake", phase: "reject", nonce, reason: "already-used" });
         }
         return;
@@ -693,7 +765,7 @@
       const ts = Date.now();
       const sigBytes = await crypto.subtle.sign(SIG, record.privKey, handshakeToBytes(record.room, nonce, ts));
       const signature = b64urlEncodeBytes(new Uint8Array(sigBytes));
-      consumedInviteNonces.add(nonce);
+      markInviteNonceConsumed(nonce);
       removePendingInvite(nonce);
       const state = ensurePeerState(peerId);
       state.handshakeComplete = true;

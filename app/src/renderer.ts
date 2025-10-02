@@ -34,6 +34,7 @@ type InvitePayload = {
   exp: number;
   ts: number;
   inviterPub: JsonWebKey;
+  sig: string;
 };
 
 type InviteToken = { token: string; payload: InvitePayload };
@@ -54,6 +55,7 @@ type ActiveInviteState = {
 const INVITE_TTL_MS = 30 * 60 * 1000;
 const PENDING_INVITES_STORE_KEY = 'unch_pending_invites_v1';
 const USED_INVITES_STORE_KEY = 'unch_used_invites_v1';
+const CONSUMED_INVITES_STORE_KEY = 'unch_consumed_invites_v1';
 
 const pendingInvites = new Map<string, PendingInviteRecord>();
 const usedInviteNonces = new Set<string>();
@@ -63,11 +65,13 @@ let activeInvite: ActiveInviteState | null = null;
 loadPendingInvitesFromStorage();
 cleanupExpiredPendingInvites();
 loadUsedInviteNonces();
+loadConsumedInviteNonces();
 
 async function makeInvitePayload({ room }: { room: string }): Promise<InviteToken> {
   const cleanRoom = (room || '').trim().toLowerCase();
   const nonce = randNonceHex(16);
   const exp = Date.now() + INVITE_TTL_MS;
+  const ts = Date.now();
 
   const keyPair = await crypto.subtle.generateKey(ALG, true, ['sign', 'verify']);
   const privJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey) as JsonWebKey;
@@ -82,13 +86,21 @@ async function makeInvitePayload({ room }: { room: string }): Promise<InviteToke
   pendingInvites.set(nonce, { room: cleanRoom, exp, privJwk, privKey: keyPair.privateKey });
   persistPendingInvites();
 
-  const payload: InvitePayload = {
-    v: 2,
+  const payloadFields: Pick<InvitePayload, 'room' | 'nonce' | 'exp' | 'ts' | 'inviterPub'> = {
     room: cleanRoom,
     nonce,
     exp,
-    ts: Date.now(),
+    ts,
     inviterPub: minimalPub
+  };
+
+  const sigBytes = await crypto.subtle.sign(SIG, keyPair.privateKey, inviteSignatureBytes(payloadFields));
+  const signature = b64urlEncodeBytes(new Uint8Array(sigBytes));
+
+  const payload: InvitePayload = {
+    v: 2,
+    ...payloadFields,
+    sig: signature
   };
 
   return { token: b64urlEncode(JSON.stringify(payload)), payload };
@@ -127,7 +139,7 @@ function parseInviteJson(json: string): InvitePayload | null {
     const data = JSON.parse(json);
     if (!data || typeof data !== 'object') return null;
     if (data.v !== 2) return null;
-    if (!data.room || !data.nonce || !data.exp || !data.inviterPub) return null;
+    if (!data.room || !data.nonce || !data.exp || !data.inviterPub || !data.sig) return null;
     return {
       v: 2,
       room: String(data.room || '').trim().toLowerCase(),
@@ -139,11 +151,40 @@ function parseInviteJson(json: string): InvitePayload | null {
         crv: data.inviterPub.crv,
         x: data.inviterPub.x,
         y: data.inviterPub.y
-      }
+      },
+      sig: String(data.sig || '').trim()
     };
   } catch (err) {
     console.warn('Invalid invite JSON', err);
     return null;
+  }
+}
+
+function inviteSignatureBytes(payload: Pick<InvitePayload, 'room' | 'nonce' | 'exp' | 'ts' | 'inviterPub'>): Uint8Array {
+  const canonical = JSON.stringify({
+    room: payload.room,
+    nonce: payload.nonce,
+    exp: payload.exp,
+    ts: payload.ts,
+    inviterPub: {
+      kty: payload.inviterPub.kty,
+      crv: payload.inviterPub.crv,
+      x: payload.inviterPub.x,
+      y: payload.inviterPub.y
+    }
+  });
+  return new TextEncoder().encode(canonical);
+}
+
+async function verifyInviteTokenSignature(payload: InvitePayload): Promise<boolean> {
+  if (!payload.sig) return false;
+  try {
+    const pubKey = await crypto.subtle.importKey('jwk', payload.inviterPub, ALG, true, ['verify']);
+    const sig = b64urlDecodeToBytes(payload.sig);
+    return await crypto.subtle.verify(SIG, pubKey, sig, inviteSignatureBytes(payload));
+  } catch (err) {
+    console.warn('Invite signature verification failed', err);
+    return false;
   }
 }
 
@@ -210,6 +251,28 @@ function persistUsedInviteNonces() {
   }
 }
 
+function loadConsumedInviteNonces() {
+  try {
+    const raw = localStorage.getItem(CONSUMED_INVITES_STORE_KEY);
+    if (!raw) return;
+    const list = JSON.parse(raw) as string[];
+    if (!Array.isArray(list)) return;
+    for (const nonce of list) {
+      if (typeof nonce === 'string') consumedInviteNonces.add(nonce);
+    }
+  } catch (err) {
+    console.warn('Failed to load consumed invites', err);
+  }
+}
+
+function persistConsumedInviteNonces() {
+  try {
+    localStorage.setItem(CONSUMED_INVITES_STORE_KEY, JSON.stringify(Array.from(consumedInviteNonces.values())));
+  } catch (err) {
+    console.warn('Failed to persist consumed invites', err);
+  }
+}
+
 function markInviteNonceUsed(nonce: string) {
   usedInviteNonces.add(nonce);
   persistUsedInviteNonces();
@@ -217,6 +280,15 @@ function markInviteNonceUsed(nonce: string) {
 
 function isInviteNonceUsed(nonce: string): boolean {
   return usedInviteNonces.has(nonce);
+}
+
+function markInviteNonceConsumed(nonce: string) {
+  consumedInviteNonces.add(nonce);
+  persistConsumedInviteNonces();
+}
+
+function isInviteNonceConsumed(nonce: string): boolean {
+  return consumedInviteNonces.has(nonce);
 }
 
 async function resolvePendingInvite(nonce: string): Promise<PendingInviteRecord | null> {
@@ -539,9 +611,18 @@ function bindInviteUI() {
     if (invitePopover) { invitePopover.remove(); invitePopover = null; }
   }
 
-  function applyInvite(payload: InvitePayload, opts: { autoJoin?: boolean } = {}) {
+  async function applyInvite(payload: InvitePayload, opts: { autoJoin?: boolean } = {}) {
+    const hasValidSignature = await verifyInviteTokenSignature(payload);
+    if (!hasValidSignature) {
+      alert('Invalid invite signature.');
+      return false;
+    }
     if (Date.now() > payload.exp) {
       alert('This invite has expired.');
+      return false;
+    }
+    if (isInviteNonceConsumed(payload.nonce)) {
+      alert('This invite has already been used.');
       return false;
     }
     if (isInviteNonceUsed(payload.nonce)) {
@@ -642,14 +723,14 @@ function bindInviteUI() {
         alert('Invalid invite');
         return;
       }
-      applyInvite(payload, { autoJoin: true });
+      void applyInvite(payload, { autoJoin: true });
     };
   }
 
   // Auto-handle if Electron opened with an URL-like arg (future: custom protocol)
   // For now, we also parse location.hash if you load a webview-like wrapper.
   const p = parseInviteFromUrl(location.href);
-  if (p) applyInvite(p, { autoJoin: true });
+  if (p) void applyInvite(p, { autoJoin: true });
 }
 
 // ---- Keys (ECDSA P-256)
@@ -698,7 +779,7 @@ async function processInviteHandshakeMessage(peerId: string, peer: any, msg: any
     const room = String(msg.room || '').trim().toLowerCase();
     const record = await resolvePendingInvite(nonce);
     if (!record) {
-      if (consumedInviteNonces.has(nonce)) {
+      if (isInviteNonceConsumed(nonce)) {
         sendJson(peer, { type: 'invite-handshake', phase: 'reject', nonce, reason: 'already-used' });
       }
       return;
@@ -720,7 +801,7 @@ async function processInviteHandshakeMessage(peerId: string, peer: any, msg: any
     const ts = Date.now();
     const sigBytes = await crypto.subtle.sign(SIG, record.privKey, handshakeToBytes(record.room, nonce, ts));
     const signature = b64urlEncodeBytes(new Uint8Array(sigBytes));
-    consumedInviteNonces.add(nonce);
+    markInviteNonceConsumed(nonce);
     removePendingInvite(nonce);
     const state = ensurePeerState(peerId);
     state.handshakeComplete = true;
