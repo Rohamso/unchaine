@@ -629,9 +629,12 @@
       }
       try {
         const tokenInfo = await makeInvitePayload({ room });
-        inviteLinkEl.value = tokenInfo.token;
+        const hostedOrigin = location.origin.replace(/\/$/, "");
+        const defaultShareLink = `${hostedOrigin}#invite=${tokenInfo.token}`;
         const webLink = `https://unchaine.pages.dev/#invite=${tokenInfo.token}`;
+        const shareLink = hostedOrigin.startsWith("http") ? defaultShareLink : webLink;
         const appLink = `unchaine://join#${tokenInfo.token}`;
+        inviteLinkEl.value = shareLink;
         const expiryText = `Link expires at ${new Date(tokenInfo.payload.exp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
         closeInvitePopover();
         invitePopover = document.createElement("div");
@@ -698,7 +701,11 @@
         }, 0);
       } catch (err) {
         console.error("Failed to create invite", err);
-        alert("Failed to create invite.");
+        if (err instanceof Error && /subtle/i.test(err.message)) {
+          alert("Secure invite generation requires a secure context (Electron app or HTTPS).");
+        } else {
+          alert("Failed to create invite.");
+        }
       }
     };
     copyBtn.onclick = async () => {
