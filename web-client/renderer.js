@@ -1,3 +1,4 @@
+console.log('Unchaine web renderer loaded');
 (() => {
   // app/src/invite.ts
   var INVITE_TTL_MS = 30 * 60 * 1e3;

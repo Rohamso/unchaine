@@ -302,12 +302,7 @@
 </div>
 
 <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
-<script>
-  (function attachRendererScript() {
-    const script = document.createElement('script');
-    script.src = './renderer.js?v=dev1';
-    document.head.appendChild(script);
-  })();
-</script>
+<!-- Load the web client bundle -->
+<script src="./renderer.js?v=dev1"></script>
 </body>
 </html>
