@@ -7,7 +7,7 @@
     "build:renderer": "esbuild app/src/renderer.ts --bundle --format=iife --platform=browser --outfile=app/renderer.js && esbuild app/src/renderer.ts --bundle --format=iife --platform=browser --outfile=web-client/renderer.js",
     "build:test-invite": "esbuild app/src/invite.ts --bundle --platform=node --format=esm --outfile=build/invite.js",
     "test": "npm run build:test-invite && node --test tests/*.test.mjs",
-    "start:electron": "npx electron app"
+    "start:electron": "npm run build:renderer && npx electron app"
   },
   "keywords": [],
   "author": "",
