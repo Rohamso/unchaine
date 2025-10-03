@@ -1,0 +1,6 @@
+{
+  "name": "p2p-demo-app",
+  "productName": "P2P Demo",
+  "version": "1.0.0",
+  "main": "main.cjs"
+}
