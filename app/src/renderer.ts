@@ -32,6 +32,12 @@ const usedInviteNonces = new Set<string>();
 const consumedInviteNonces = new Set<string>();
 let activeInvite: ActiveInviteState | null = null;
 
+const ROOM_HISTORY_STORE_KEY = 'unch_room_history_v1';
+const roomHistory = loadRoomHistory();
+let roomTabsLabelEl: HTMLElement | null = null;
+let roomTabsEl: HTMLElement | null = null;
+let currentRoom: string | null = null;
+
 loadPendingInvitesFromStorage();
 cleanupExpiredPendingInvites();
 loadUsedInviteNonces();
@@ -139,6 +145,34 @@ function loadConsumedInviteNonces() {
   }
 }
 
+function normalizeRoom(value: string): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function loadRoomHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(ROOM_HISTORY_STORE_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw) as unknown;
+    if (!Array.isArray(list)) return [];
+    const normalized = list
+      .map((entry) => (typeof entry === 'string' ? normalizeRoom(entry) : ''))
+      .filter((room): room is string => Boolean(room));
+    return Array.from(new Set(normalized));
+  } catch (err) {
+    console.warn('Failed to load room history', err);
+    return [];
+  }
+}
+
+function saveRoomHistory() {
+  try {
+    localStorage.setItem(ROOM_HISTORY_STORE_KEY, JSON.stringify(roomHistory));
+  } catch (err) {
+    console.warn('Failed to persist room history', err);
+  }
+}
+
 function persistConsumedInviteNonces() {
   try {
     localStorage.setItem(CONSUMED_INVITES_STORE_KEY, JSON.stringify(Array.from(consumedInviteNonces.values())));
@@ -154,6 +188,39 @@ function markInviteNonceUsed(nonce: string) {
 
 function isInviteNonceUsed(nonce: string): boolean {
   return usedInviteNonces.has(nonce);
+}
+
+function recordRoomHistory(room: string) {
+  const normalized = normalizeRoom(room);
+  if (!normalized) return;
+  const existingIdx = roomHistory.indexOf(normalized);
+  if (existingIdx !== -1) roomHistory.splice(existingIdx, 1);
+  roomHistory.unshift(normalized);
+  if (roomHistory.length > 12) roomHistory.length = 12;
+  saveRoomHistory();
+  renderRoomTabs();
+}
+
+function renderRoomTabs() {
+  if (!roomTabsEl) return;
+  roomTabsEl.innerHTML = '';
+  const hasRooms = roomHistory.length > 0;
+  if (!hasRooms) {
+    roomTabsEl.classList.add('hidden');
+    roomTabsLabelEl?.classList.add('hidden');
+    return;
+  }
+  roomTabsEl.classList.remove('hidden');
+  roomTabsLabelEl?.classList.remove('hidden');
+  for (const room of roomHistory) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'room-tab';
+    if (currentRoom && currentRoom === room) btn.classList.add('active');
+    btn.textContent = room;
+    btn.onclick = () => { switchToRoom(room); };
+    roomTabsEl.appendChild(btn);
+  }
 }
 
 function markInviteNonceConsumed(nonce: string) {
@@ -413,15 +480,30 @@ function startPeer(peerId: string, initiator: boolean, turnUrl: string) {
 
 toggleCfg.addEventListener('click', () => { cfg.classList.toggle('hidden'); });
 
-joinBtn.addEventListener('click', () => {
+async function joinFromInputs(): Promise<void> {
   if (joined) return;
-  let room = (roomEl.value || 'demo-room-1').trim().toLowerCase();
+  let room = normalizeRoom(roomEl.value || 'demo-room-1');
+  if (!room) { alert('Enter a room name first'); return; }
+  roomEl.value = room;
   const url = (signalUrlEl.value || '').trim();
   const turn = (turnEl.value || '').trim();
   if (!url) { alert('Enter signaling URL'); return; }
 
+  currentRoom = room;
+  renderRoomTabs();
+
+  try { ws?.close(); } catch {}
+  for (const [, p] of peers) { try { p.destroy(); } catch {} }
+  peers.clear();
+  peerStates.clear();
+
   ws = new WebSocket(url);
-  ws.onopen = () => { setStatus(true); ws!.send(JSON.stringify({ type: 'join', room })); cfg.classList.add('hidden'); };
+
+  ws.onopen = () => {
+    setStatus(true);
+    ws!.send(JSON.stringify({ type: 'join', room }));
+    cfg.classList.add('hidden');
+  };
   ws.onerror = () => { setStatus(false); };
   ws.onclose = () => { setStatus(false); joined = false; };
 
@@ -429,6 +511,8 @@ joinBtn.addEventListener('click', () => {
     const msg = JSON.parse(String(ev.data));
     if (msg.type === 'peers') {
       joined = true;
+      currentRoom = room;
+      recordRoomHistory(room);
       for (const pid of msg.peers) startPeer(pid, true, turn);
     } else if (msg.type === 'new-peer') {
       startPeer(msg.id, false, turn);
@@ -437,16 +521,39 @@ joinBtn.addEventListener('click', () => {
       p.signal(msg.data);
     }
   };
-});
+}
 
-leaveBtn.addEventListener('click', () => {
+function leaveRoom(opts: { silent?: boolean } = {}) {
   try { ws?.close(); } catch {}
+  ws = null;
   for (const [, p] of peers) { try { p.destroy(); } catch {} }
   peers.clear();
   peerStates.clear();
-  setStatus(false); joined = false;
-  bubble({ self: false, text: 'You left the room', ts: Date.now() });
-});
+  setStatus(false);
+  joined = false;
+  if (!opts.silent) {
+    bubble({ self: false, text: 'You left the room', ts: Date.now() });
+  }
+  renderRoomTabs();
+}
+
+joinBtn.addEventListener('click', () => { void joinFromInputs(); });
+leaveBtn.addEventListener('click', () => { leaveRoom(); });
+
+function switchToRoom(room: string) {
+  const target = normalizeRoom(room);
+  if (!target) return;
+  if (currentRoom === target && joined) return;
+  roomEl.value = target;
+  currentRoom = target;
+  renderRoomTabs();
+  if (joined) {
+    leaveRoom({ silent: true });
+    setTimeout(() => { void joinFromInputs(); }, 50);
+  } else {
+    void joinFromInputs();
+  }
+}
 
 async function sendCurrent() {
   const text = (input.value || '').trim();
@@ -472,7 +579,12 @@ input.addEventListener('keydown', (e: KeyboardEvent) => {
 });
 
 function bindInviteUI() {
-  const roomEl = document.getElementById('room') as HTMLInputElement;
+  roomTabsLabelEl = document.getElementById('roomTabsLabel') as HTMLElement | null;
+  roomTabsEl = document.getElementById('roomTabs') as HTMLElement | null;
+  if (!currentRoom && roomEl) currentRoom = normalizeRoom(roomEl.value);
+  if (!currentRoom && roomHistory.length) currentRoom = roomHistory[0];
+  if (currentRoom) recordRoomHistory(currentRoom);
+  else renderRoomTabs();
   const createBtn = document.getElementById('createInviteBtn') as HTMLButtonElement;
   const inviteLinkEl = document.getElementById('inviteLink') as HTMLInputElement;
   const copyBtn = document.getElementById('copyInviteBtn') as HTMLButtonElement;
@@ -507,7 +619,7 @@ function bindInviteUI() {
     inviteLinkEl.value = token;
     roomEl.value = payload.room;
     activeInvite = { payload, used: false };
-    if (opts.autoJoin && typeof (window as any).join === 'function') (window as any).join();
+    if (opts.autoJoin) switchToRoom(payload.room);
     return true;
   }
 
@@ -742,3 +854,4 @@ async function processInviteHandshakeMessage(peerId: string, peer: any, msg: any
 
 // Utility
 window.addEventListener('DOMContentLoaded', bindInviteUI);
+(window as any).join = () => { switchToRoom(roomEl.value || ''); };

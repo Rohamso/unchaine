@@ -137,6 +137,11 @@
   var usedInviteNonces = /* @__PURE__ */ new Set();
   var consumedInviteNonces = /* @__PURE__ */ new Set();
   var activeInvite = null;
+  var ROOM_HISTORY_STORE_KEY = "unch_room_history_v1";
+  var roomHistory = loadRoomHistory();
+  var roomTabsLabelEl = null;
+  var roomTabsEl = null;
+  var currentRoom = null;
   loadPendingInvitesFromStorage();
   cleanupExpiredPendingInvites();
   loadUsedInviteNonces();
@@ -234,6 +239,29 @@
       console.warn("Failed to load consumed invites", err);
     }
   }
+  function normalizeRoom(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+  function loadRoomHistory() {
+    try {
+      const raw = localStorage.getItem(ROOM_HISTORY_STORE_KEY);
+      if (!raw) return [];
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return [];
+      const normalized = list.map((entry) => typeof entry === "string" ? normalizeRoom(entry) : "").filter((room) => Boolean(room));
+      return Array.from(new Set(normalized));
+    } catch (err) {
+      console.warn("Failed to load room history", err);
+      return [];
+    }
+  }
+  function saveRoomHistory() {
+    try {
+      localStorage.setItem(ROOM_HISTORY_STORE_KEY, JSON.stringify(roomHistory));
+    } catch (err) {
+      console.warn("Failed to persist room history", err);
+    }
+  }
   function persistConsumedInviteNonces() {
     try {
       localStorage.setItem(CONSUMED_INVITES_STORE_KEY, JSON.stringify(Array.from(consumedInviteNonces.values())));
@@ -247,6 +275,39 @@
   }
   function isInviteNonceUsed(nonce) {
     return usedInviteNonces.has(nonce);
+  }
+  function recordRoomHistory(room) {
+    const normalized = normalizeRoom(room);
+    if (!normalized) return;
+    const existingIdx = roomHistory.indexOf(normalized);
+    if (existingIdx !== -1) roomHistory.splice(existingIdx, 1);
+    roomHistory.unshift(normalized);
+    if (roomHistory.length > 12) roomHistory.length = 12;
+    saveRoomHistory();
+    renderRoomTabs();
+  }
+  function renderRoomTabs() {
+    if (!roomTabsEl) return;
+    roomTabsEl.innerHTML = "";
+    const hasRooms = roomHistory.length > 0;
+    if (!hasRooms) {
+      roomTabsEl.classList.add("hidden");
+      roomTabsLabelEl?.classList.add("hidden");
+      return;
+    }
+    roomTabsEl.classList.remove("hidden");
+    roomTabsLabelEl?.classList.remove("hidden");
+    for (const room of roomHistory) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "room-tab";
+      if (currentRoom && currentRoom === room) btn.classList.add("active");
+      btn.textContent = room;
+      btn.onclick = () => {
+        switchToRoom(room);
+      };
+      roomTabsEl.appendChild(btn);
+    }
   }
   function markInviteNonceConsumed(nonce) {
     consumedInviteNonces.add(nonce);
@@ -497,15 +558,34 @@
   toggleCfg.addEventListener("click", () => {
     cfg.classList.toggle("hidden");
   });
-  joinBtn.addEventListener("click", () => {
+  async function joinFromInputs() {
     if (joined) return;
-    let room = (roomEl.value || "demo-room-1").trim().toLowerCase();
+    let room = normalizeRoom(roomEl.value || "demo-room-1");
+    if (!room) {
+      alert("Enter a room name first");
+      return;
+    }
+    roomEl.value = room;
     const url = (signalUrlEl.value || "").trim();
     const turn = (turnEl.value || "").trim();
     if (!url) {
       alert("Enter signaling URL");
       return;
     }
+    currentRoom = room;
+    renderRoomTabs();
+    try {
+      ws?.close();
+    } catch {
+    }
+    for (const [, p] of peers) {
+      try {
+        p.destroy();
+      } catch {
+      }
+    }
+    peers.clear();
+    peerStates.clear();
     ws = new WebSocket(url);
     ws.onopen = () => {
       setStatus(true);
@@ -523,6 +603,8 @@
       const msg = JSON.parse(String(ev.data));
       if (msg.type === "peers") {
         joined = true;
+        currentRoom = room;
+        recordRoomHistory(room);
         for (const pid of msg.peers) startPeer(pid, true, turn);
       } else if (msg.type === "new-peer") {
         startPeer(msg.id, false, turn);
@@ -531,12 +613,13 @@
         p.signal(msg.data);
       }
     };
-  });
-  leaveBtn.addEventListener("click", () => {
+  }
+  function leaveRoom(opts = {}) {
     try {
       ws?.close();
     } catch {
     }
+    ws = null;
     for (const [, p] of peers) {
       try {
         p.destroy();
@@ -547,8 +630,33 @@
     peerStates.clear();
     setStatus(false);
     joined = false;
-    bubble({ self: false, text: "You left the room", ts: Date.now() });
+    if (!opts.silent) {
+      bubble({ self: false, text: "You left the room", ts: Date.now() });
+    }
+    renderRoomTabs();
+  }
+  joinBtn.addEventListener("click", () => {
+    void joinFromInputs();
   });
+  leaveBtn.addEventListener("click", () => {
+    leaveRoom();
+  });
+  function switchToRoom(room) {
+    const target = normalizeRoom(room);
+    if (!target) return;
+    if (currentRoom === target && joined) return;
+    roomEl.value = target;
+    currentRoom = target;
+    renderRoomTabs();
+    if (joined) {
+      leaveRoom({ silent: true });
+      setTimeout(() => {
+        void joinFromInputs();
+      }, 50);
+    } else {
+      void joinFromInputs();
+    }
+  }
   async function sendCurrent() {
     const text = (input.value || "").trim();
     if (!text) return;
@@ -583,7 +691,12 @@
     }
   });
   function bindInviteUI() {
-    const roomEl2 = document.getElementById("room");
+    roomTabsLabelEl = document.getElementById("roomTabsLabel");
+    roomTabsEl = document.getElementById("roomTabs");
+    if (!currentRoom && roomEl) currentRoom = normalizeRoom(roomEl.value);
+    if (!currentRoom && roomHistory.length) currentRoom = roomHistory[0];
+    if (currentRoom) recordRoomHistory(currentRoom);
+    else renderRoomTabs();
     const createBtn = document.getElementById("createInviteBtn");
     const inviteLinkEl = document.getElementById("inviteLink");
     const copyBtn = document.getElementById("copyInviteBtn");
@@ -616,13 +729,13 @@
       }
       const token = b64urlEncode(JSON.stringify(payload));
       inviteLinkEl.value = token;
-      roomEl2.value = payload.room;
+      roomEl.value = payload.room;
       activeInvite = { payload, used: false };
-      if (opts.autoJoin && typeof window.join === "function") window.join();
+      if (opts.autoJoin) switchToRoom(payload.room);
       return true;
     }
     createBtn.onclick = async () => {
-      const room = (roomEl2.value || "").trim();
+      const room = (roomEl.value || "").trim();
       if (!room) {
         alert("Enter a room name first");
         return;
@@ -849,4 +962,7 @@
     }
   }
   window.addEventListener("DOMContentLoaded", bindInviteUI);
+  window.join = () => {
+    switchToRoom(roomEl.value || "");
+  };
 })();

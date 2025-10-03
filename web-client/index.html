@@ -138,6 +138,45 @@
   .toolbar-row button.outline:hover {
     background: rgba(11,132,255,0.08);
   }
+  .room-tabs-label {
+    width: 100%;
+    padding: 4px 16px;
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .room-tabs-label.hidden { display: none !important; }
+  .room-tabs {
+    width: 100%;
+    padding: 8px 16px;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    overflow-x: auto;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+  }
+  .room-tabs.hidden {
+    display: none !important;
+  }
+  .room-tab {
+    flex: none;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--muted);
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    font-size: 14px;
+  }
+  .room-tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
   .hidden { display: none !important; }
 
   .wrap {
@@ -194,6 +233,8 @@
   @media (min-width: 768px) {
     .top-inner,
     .controls,
+    .room-tabs-label,
+    .room-tabs,
     .toolbar-row,
     .wrap {
       max-width: 960px;
@@ -238,6 +279,8 @@
       <button id="joinBtn">Join</button>
       <button id="leaveBtn" class="secondary">Leave</button>
     </div>
+    <div class="room-tabs-label hidden" id="roomTabsLabel">Recent Rooms</div>
+    <div class="room-tabs hidden" id="roomTabs"></div>
     <div class="toolbar-row">
       <button id="createInviteBtn">Create Invite</button>
       <input id="inviteLink" placeholder="Invite link">
