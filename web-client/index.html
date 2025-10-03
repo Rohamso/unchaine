@@ -5,51 +5,222 @@
   <title>Messages</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-  /* message menu */
-  .msg-menu{
-    position:absolute; z-index:9999;
-    background:#fff; color:#111;
-    border:1px solid #e5e7eb; border-radius:10px;
-    box-shadow:0 10px 30px rgba(0,0,0,.08);
-    padding:6px; min-width:140px; display:none;
+  .msg-menu {
+    position: absolute;
+    z-index: 9999;
+    background: #fff;
+    color: #111;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.08);
+    padding: 6px;
+    min-width: 140px;
+    display: none;
   }
-  .msg-menu.open{ display:block; }
-  .msg-menu button{
-    display:block; width:100%; text-align:left;
-    background:transparent; border:0; padding:8px 10px; border-radius:8px; cursor:pointer;
-    font:inherit; color:inherit;
+  .msg-menu.open { display: block; }
+  .msg-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
   }
-  .msg-menu button:hover{ background:#f5f5f7; }
-    :root{ --bg:#f5f5f7; --panel:#ffffff; --text:#111; --muted:#6b7280;
-           --me:#0b84ff; --me-text:#fff; --them:#e9e9eb; --them-text:#111;
-           --bar:#f8f8fb; --border:#e5e7eb; --accent:#0b84ff; }
-    *{box-sizing:border-box} html,body{height:100%;margin:0}
-    body{font:16px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--text);background:var(--bg)}
-    .app{display:flex;flex-direction:column;height:100%}
-    .top{position:sticky;top:0;z-index:10;background:var(--bar);border-bottom:1px solid var(--border)}
-    .top-inner{max-width:900px;margin:0 auto;padding:10px 12px;display:flex;align-items:center;gap:8px}
-    .title{font-weight:600;margin-right:auto}
-    .status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
-    .dot{width:8px;height:8px;border-radius:50%;background:#bbb}.dot.on{background:#10b981}
-    .controls{max-width:900px;margin:0 auto;padding:8px 12px;display:grid;
-      grid-template-columns:1fr 1.2fr .7fr auto; gap:8px; border-top:1px solid var(--border); background:var(--panel)}
-    .controls input{padding:10px;border:1px solid var(--border);border-radius:10px}
-    .controls button{padding:10px 14px;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:10px;cursor:pointer}
-    .controls button.secondary{background:#fff;color:var(--accent)}
-    .hidden{display:none!important}
-    .wrap{max-width:900px;margin:0 auto;flex:1;display:flex;flex-direction:column}
-    .msgs{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
-    .row{display:flex;gap:8px;align-items:flex-end}
-    .row.me{justify-content:flex-end}
-    .bubble{max-width:min(72%,560px);padding:10px 12px;border-radius:18px;line-height:1.35;white-space:pre-wrap;word-wrap:break-word}
-    .me .bubble{background:var(--me);color:var(--me-text);border-bottom-right-radius:6px}
-    .them .bubble{background:var(--them);color:var(--them-text);border-bottom-left-radius:6px}
-    .meta{font-size:12px;color:var(--muted);margin:0 6px}
-    .inputbar{padding:10px 12px;border-top:1px solid var(--border);background:var(--panel);display:flex;gap:8px}
-    .inputbar textarea{flex:1;resize:none;max-height:140px;min-height:42px;padding:10px 12px;border:1px solid var(--border);border-radius:20px;outline:none}
-    .send{padding:10px 16px;border:none;background:var(--accent);color:#fff;border-radius:18px;cursor:pointer}
-    .badge{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
-    @media (max-width:700px){ .controls{grid-template-columns:1fr} }
+  .msg-menu button:hover { background: #f5f5f7; }
+
+  :root {
+    --bg: #f5f5f7;
+    --panel: #ffffff;
+    --text: #111;
+    --muted: #6b7280;
+    --me: #0b84ff;
+    --me-text: #fff;
+    --them: #e9e9eb;
+    --them-text: #111;
+    --bar: #f8f8fb;
+    --border: #e5e7eb;
+    --accent: #0b84ff;
+    --accent-hover: #086ed8;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { min-height: 100%; margin: 0; }
+  body {
+    font: 16px -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+  }
+  input, button, textarea { font: inherit; }
+
+  .app { min-height: 100vh; display: flex; flex-direction: column; }
+  .top { position: sticky; top: 0; z-index: 10; background: var(--bar); border-bottom: 1px solid var(--border); }
+  .top-inner {
+    width: 100%;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .title { font-weight: 600; font-size: 1.1rem; }
+  .status { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #bbb; }
+  .dot.on { background: #10b981; }
+  .badge {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: #fff;
+    cursor: pointer;
+  }
+
+  .controls,
+  .toolbar-row {
+    width: 100%;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+  }
+  .controls input,
+  .toolbar-row input,
+  .toolbar-row button,
+  .controls button {
+    width: 100%;
+  }
+  .controls input,
+  .toolbar-row input,
+  .inputbar textarea {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #fff;
+  }
+  .controls input:focus,
+  .toolbar-row input:focus,
+  .inputbar textarea:focus {
+    border-color: var(--accent);
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(11,132,255,0.12);
+  }
+
+  .controls button,
+  .toolbar-row button,
+  .send {
+    padding: 12px 16px;
+    border-radius: 12px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  }
+  .controls button:hover,
+  .toolbar-row button:hover,
+  .send:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+  .controls button.secondary,
+  .toolbar-row button.outline {
+    background: #fff;
+    color: var(--accent);
+  }
+  .controls button.secondary:hover,
+  .toolbar-row button.outline:hover {
+    background: rgba(11,132,255,0.08);
+  }
+  .hidden { display: none !important; }
+
+  .wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+  }
+  .msgs {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 0 12px;
+  }
+  .row { display: flex; gap: 8px; align-items: flex-end; }
+  .row.me { justify-content: flex-end; }
+  .bubble {
+    max-width: min(85vw, 520px);
+    padding: 10px 12px;
+    border-radius: 18px;
+    line-height: 1.35;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    position: relative;
+  }
+  .row.me .bubble { background: var(--me); color: var(--me-text); border-bottom-right-radius: 6px; }
+  .row.them .bubble { background: var(--them); color: var(--them-text); border-bottom-left-radius: 6px; }
+  .meta { font-size: 12px; color: var(--muted); margin: 0 6px; }
+
+  .inputbar {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .inputbar textarea {
+    flex: 1;
+    resize: none;
+    max-height: 160px;
+    min-height: 48px;
+  }
+  .send { width: 100%; }
+
+  @media (min-width: 640px) {
+    .inputbar { flex-direction: row; align-items: flex-end; }
+    .send { width: auto; }
+  }
+
+  @media (min-width: 768px) {
+    .top-inner,
+    .controls,
+    .toolbar-row,
+    .wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .top-inner { flex-direction: row; align-items: center; }
+    .badge { align-self: center; }
+    .controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 0.8fr) auto auto;
+      align-items: center;
+    }
+    .controls button,
+    .controls input { width: 100%; }
+    .controls button.secondary { justify-self: start; }
+    .toolbar-row { flex-direction: row; align-items: center; }
+    .toolbar-row input { flex: 1; }
+    .toolbar-row button { width: auto; }
+    .wrap { padding: 20px; }
+    .bubble { max-width: min(70%, 560px); }
+  }
+
+  @media (min-width: 1024px) {
+    .wrap { padding: 24px 20px; }
+    .msgs { padding-bottom: 16px; gap: 12px; }
+  }
   </style>
 </head>
 <body>
@@ -66,12 +237,11 @@
       <input id="turn" placeholder="TURN (optional): turn:turn.yourdomain.com:3478"/>
       <button id="joinBtn">Join</button>
       <button id="leaveBtn" class="secondary">Leave</button>
-
-      <div style="display:flex; gap:8px; margin-top:8px;">
-        <button id="createInviteBtn">Create Invite</button>
-        <input id="inviteLink" placeholder="Invite link will appear here" style="flex:1;">
-        <button id="copyInviteBtn">Copy</button>
-      </div>
+    </div>
+    <div class="toolbar-row">
+      <button id="createInviteBtn">Create Invite</button>
+      <input id="inviteLink" placeholder="Invite link will appear here">
+      <button id="copyInviteBtn" class="outline">Copy</button>
     </div>
   </div>
 
