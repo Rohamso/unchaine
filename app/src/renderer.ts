@@ -521,7 +521,7 @@ function bindInviteUI() {
       const webLink = `https://unchaine.pages.dev/#invite=${tokenInfo.token}`;
       const shareLink = hostedOrigin.startsWith('http') ? defaultShareLink : webLink;
       const appLink = `unchaine://join#${tokenInfo.token}`;
-      inviteLinkEl.value = shareLink;
+      inviteLinkEl.value = tokenInfo.token;
       const expiryText = `Link expires at ${new Date(tokenInfo.payload.exp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
       closeInvitePopover();
       invitePopover = document.createElement('div');
