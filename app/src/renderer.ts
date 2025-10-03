@@ -1,43 +1,14 @@
-// --- helpers: base64url <-> string
-function b64urlEncode(str: string): string {
-  const b64 = btoa(str);
-  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/,'');
-}
-function b64urlDecode(b64url: string): string {
-  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
-  const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
-  return atob(b64 + pad);
-}
-
-// ---- Base64url helpers
-function b64urlEncodeBytes(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i=0;i<bytes.length;i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-}
-function b64urlDecodeToBytes(b64url: string): Uint8Array {
-  const b64 = b64url.replace(/-/g,'+').replace(/_/g,'/'); 
-  const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
-  const bin = atob(b64 + pad);
-  const out = new Uint8Array(bin.length);
-  for (let i=0;i<bin.length;i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-function b64urlEncodeJSON(obj: any): string { return b64urlEncodeBytes(new TextEncoder().encode(JSON.stringify(obj))); }
-function b64urlDecodeJSON(b64: string): any { return JSON.parse(new TextDecoder().decode(b64urlDecodeToBytes(b64))); }
-
-// --- helpers: create/parse invite payload
-type InvitePayload = {
-  v: number;
-  room: string;
-  nonce: string;
-  exp: number;
-  ts: number;
-  inviterPub: JsonWebKey;
-  sig: string;
-};
-
-type InviteToken = { token: string; payload: InvitePayload };
+import {
+  InvitePayload,
+  InviteToken,
+  b64urlEncode,
+  b64urlDecode,
+  b64urlEncodeBytes,
+  b64urlDecodeToBytes,
+  createInvite,
+  decodeInviteToken,
+  verifyInviteTokenSignature
+} from './invite';
 
 type PendingInviteRecord = {
   room: string;
@@ -52,7 +23,6 @@ type ActiveInviteState = {
   handshakePeerId?: string;
 };
 
-const INVITE_TTL_MS = 30 * 60 * 1000;
 const PENDING_INVITES_STORE_KEY = 'unch_pending_invites_v1';
 const USED_INVITES_STORE_KEY = 'unch_used_invites_v1';
 const CONSUMED_INVITES_STORE_KEY = 'unch_consumed_invites_v1';
@@ -68,42 +38,10 @@ loadUsedInviteNonces();
 loadConsumedInviteNonces();
 
 async function makeInvitePayload({ room }: { room: string }): Promise<InviteToken> {
-  const cleanRoom = (room || '').trim().toLowerCase();
-  const nonce = randNonceHex(16);
-  const exp = Date.now() + INVITE_TTL_MS;
-  const ts = Date.now();
-
-  const keyPair = await crypto.subtle.generateKey(ALG, true, ['sign', 'verify']);
-  const privJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey) as JsonWebKey;
-  const pubJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-  const minimalPub: JsonWebKey = {
-    kty: pubJwk.kty,
-    crv: pubJwk.crv,
-    x: pubJwk.x,
-    y: pubJwk.y
-  };
-
-  pendingInvites.set(nonce, { room: cleanRoom, exp, privJwk, privKey: keyPair.privateKey });
+  const { token, payload, privateKey, privJwk } = await createInvite(room);
+  pendingInvites.set(payload.nonce, { room: payload.room, exp: payload.exp, privJwk, privKey: privateKey });
   persistPendingInvites();
-
-  const payloadFields: Pick<InvitePayload, 'room' | 'nonce' | 'exp' | 'ts' | 'inviterPub'> = {
-    room: cleanRoom,
-    nonce,
-    exp,
-    ts,
-    inviterPub: minimalPub
-  };
-
-  const sigBytes = await crypto.subtle.sign(SIG, keyPair.privateKey, inviteSignatureBytes(payloadFields));
-  const signature = b64urlEncodeBytes(new Uint8Array(sigBytes));
-
-  const payload: InvitePayload = {
-    v: 2,
-    ...payloadFields,
-    sig: signature
-  };
-
-  return { token: b64urlEncode(JSON.stringify(payload)), payload };
+  return { token, payload };
 }
 
 function parseInviteFromUrl(urlOrHash: string): InvitePayload | null {
@@ -122,70 +60,6 @@ function parseInviteFromUrl(urlOrHash: string): InvitePayload | null {
     console.warn('Bad invite payload', e);
   }
   return null;
-}
-
-function decodeInviteToken(token: string): InvitePayload | null {
-  try {
-    const raw = b64urlDecode(token.trim());
-    return parseInviteJson(raw);
-  } catch (err) {
-    console.warn('Unable to decode invite token', err);
-    return null;
-  }
-}
-
-function parseInviteJson(json: string): InvitePayload | null {
-  try {
-    const data = JSON.parse(json);
-    if (!data || typeof data !== 'object') return null;
-    if (data.v !== 2) return null;
-    if (!data.room || !data.nonce || !data.exp || !data.inviterPub || !data.sig) return null;
-    return {
-      v: 2,
-      room: String(data.room || '').trim().toLowerCase(),
-      nonce: String(data.nonce),
-      exp: Number(data.exp),
-      ts: Number(data.ts || 0),
-      inviterPub: {
-        kty: data.inviterPub.kty,
-        crv: data.inviterPub.crv,
-        x: data.inviterPub.x,
-        y: data.inviterPub.y
-      },
-      sig: String(data.sig || '').trim()
-    };
-  } catch (err) {
-    console.warn('Invalid invite JSON', err);
-    return null;
-  }
-}
-
-function inviteSignatureBytes(payload: Pick<InvitePayload, 'room' | 'nonce' | 'exp' | 'ts' | 'inviterPub'>): Uint8Array {
-  const canonical = JSON.stringify({
-    room: payload.room,
-    nonce: payload.nonce,
-    exp: payload.exp,
-    ts: payload.ts,
-    inviterPub: {
-      kty: payload.inviterPub.kty,
-      crv: payload.inviterPub.crv,
-      x: payload.inviterPub.x,
-      y: payload.inviterPub.y
-    }
-  });
-  return new TextEncoder().encode(canonical);
-}
-
-async function verifyInviteTokenSignature(payload: InvitePayload): Promise<boolean> {
-  if (!payload.sig) return false;
-  try {
-    const pubKey = await crypto.subtle.importKey('jwk', payload.inviterPub, ALG, true, ['verify']);
-    const sig = b64urlDecodeToBytes(payload.sig);
-    return await crypto.subtle.verify(SIG, pubKey, sig, inviteSignatureBytes(payload));
-  } catch (err) {
-    console.warn('Invite signature verification failed', err);
-    return false;
-  }
 }
 
 function loadPendingInvitesFromStorage() {
@@ -860,9 +734,4 @@ async function processInviteHandshakeMessage(peerId: string, peer: any, msg: any
 }
 
 // Utility
-function randNonceHex(n=16): string { // 16 bytes -> 32 hex chars
-  const a = new Uint8Array(n); crypto.getRandomValues(a);
-  return Array.from(a).map(b=>b.toString(16).padStart(2,'0')).join('');
-}
-
 window.addEventListener('DOMContentLoaded', bindInviteUI);

@@ -1,5 +1,8 @@
 (() => {
-  // app/src/renderer.ts
+  // app/src/invite.ts
+  var INVITE_TTL_MS = 30 * 60 * 1e3;
+  var INVITE_KEY_ALG = { name: "ECDSA", namedCurve: "P-256" };
+  var INVITE_SIG_ALG = { name: "ECDSA", hash: "SHA-256" };
   function b64urlEncode(str) {
     const b64 = btoa(str);
     return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -22,34 +25,45 @@
     for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return out;
   }
-  var INVITE_TTL_MS = 30 * 60 * 1e3;
-  var PENDING_INVITES_STORE_KEY = "unch_pending_invites_v1";
-  var USED_INVITES_STORE_KEY = "unch_used_invites_v1";
-  var CONSUMED_INVITES_STORE_KEY = "unch_consumed_invites_v1";
-  var pendingInvites = /* @__PURE__ */ new Map();
-  var usedInviteNonces = /* @__PURE__ */ new Set();
-  var consumedInviteNonces = /* @__PURE__ */ new Set();
-  var activeInvite = null;
-  loadPendingInvitesFromStorage();
-  cleanupExpiredPendingInvites();
-  loadUsedInviteNonces();
-  loadConsumedInviteNonces();
-  async function makeInvitePayload({ room }) {
-    const cleanRoom = (room || "").trim().toLowerCase();
-    const nonce = randNonceHex(16);
+  function canonicalRoom(room) {
+    return (room || "").trim().toLowerCase();
+  }
+  function randNonceHex(n = 16, cryptoImpl = globalThis.crypto) {
+    if (!cryptoImpl?.getRandomValues) throw new Error("crypto.getRandomValues unavailable");
+    const bytes = new Uint8Array(n);
+    cryptoImpl.getRandomValues(bytes);
+    return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  function inviteSignatureBytes(payload) {
+    const canonical = JSON.stringify({
+      room: payload.room,
+      nonce: payload.nonce,
+      exp: payload.exp,
+      ts: payload.ts,
+      inviterPub: {
+        kty: payload.inviterPub.kty,
+        crv: payload.inviterPub.crv,
+        x: payload.inviterPub.x,
+        y: payload.inviterPub.y
+      }
+    });
+    return new TextEncoder().encode(canonical);
+  }
+  async function createInvite(room, cryptoImpl = globalThis.crypto) {
+    if (!cryptoImpl?.subtle) throw new Error("crypto.subtle unavailable");
+    const cleanRoom = canonicalRoom(room);
+    const nonce = randNonceHex(16, cryptoImpl);
     const exp = Date.now() + INVITE_TTL_MS;
     const ts = Date.now();
-    const keyPair = await crypto.subtle.generateKey(ALG, true, ["sign", "verify"]);
-    const privJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
-    const pubJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    const keyPair = await cryptoImpl.subtle.generateKey(INVITE_KEY_ALG, true, ["sign", "verify"]);
+    const privJwk = await cryptoImpl.subtle.exportKey("jwk", keyPair.privateKey);
+    const pubJwk = await cryptoImpl.subtle.exportKey("jwk", keyPair.publicKey);
     const minimalPub = {
       kty: pubJwk.kty,
       crv: pubJwk.crv,
       x: pubJwk.x,
       y: pubJwk.y
     };
-    pendingInvites.set(nonce, { room: cleanRoom, exp, privJwk, privKey: keyPair.privateKey });
-    persistPendingInvites();
     const payloadFields = {
       room: cleanRoom,
       nonce,
@@ -57,39 +71,19 @@
       ts,
       inviterPub: minimalPub
     };
-    const sigBytes = await crypto.subtle.sign(SIG, keyPair.privateKey, inviteSignatureBytes(payloadFields));
+    const sigBytes = await cryptoImpl.subtle.sign(INVITE_SIG_ALG, keyPair.privateKey, inviteSignatureBytes(payloadFields));
     const signature = b64urlEncodeBytes(new Uint8Array(sigBytes));
     const payload = {
       v: 2,
       ...payloadFields,
       sig: signature
     };
-    return { token: b64urlEncode(JSON.stringify(payload)), payload };
-  }
-  function parseInviteFromUrl(urlOrHash) {
-    try {
-      if (urlOrHash.includes("invite=")) {
-        const h = new URL(urlOrHash, location.origin).hash || urlOrHash;
-        const m = h.match(/invite=([^&]+)/);
-        if (!m) return null;
-        return decodeInviteToken(m[1]);
-      } else if (urlOrHash.includes("#")) {
-        const frag = urlOrHash.split("#")[1];
-        return decodeInviteToken(frag);
-      }
-    } catch (e) {
-      console.warn("Bad invite payload", e);
-    }
-    return null;
-  }
-  function decodeInviteToken(token) {
-    try {
-      const raw = b64urlDecode(token.trim());
-      return parseInviteJson(raw);
-    } catch (err) {
-      console.warn("Unable to decode invite token", err);
-      return null;
-    }
+    return {
+      token: b64urlEncode(JSON.stringify(payload)),
+      payload,
+      privateKey: keyPair.privateKey,
+      privJwk
+    };
   }
   function parseInviteJson(json) {
     try {
@@ -111,36 +105,63 @@
         },
         sig: String(data.sig || "").trim()
       };
-    } catch (err) {
-      console.warn("Invalid invite JSON", err);
+    } catch {
       return null;
     }
   }
-  function inviteSignatureBytes(payload) {
-    const canonical = JSON.stringify({
-      room: payload.room,
-      nonce: payload.nonce,
-      exp: payload.exp,
-      ts: payload.ts,
-      inviterPub: {
-        kty: payload.inviterPub.kty,
-        crv: payload.inviterPub.crv,
-        x: payload.inviterPub.x,
-        y: payload.inviterPub.y
-      }
-    });
-    return new TextEncoder().encode(canonical);
-  }
-  async function verifyInviteTokenSignature(payload) {
-    if (!payload.sig) return false;
+  function decodeInviteToken(token) {
     try {
-      const pubKey = await crypto.subtle.importKey("jwk", payload.inviterPub, ALG, true, ["verify"]);
+      const raw = b64urlDecode(token.trim());
+      return parseInviteJson(raw);
+    } catch {
+      return null;
+    }
+  }
+  async function verifyInviteTokenSignature(payload, cryptoImpl = globalThis.crypto) {
+    if (!payload.sig) return false;
+    if (!cryptoImpl?.subtle) throw new Error("crypto.subtle unavailable");
+    try {
+      const pubKey = await cryptoImpl.subtle.importKey("jwk", payload.inviterPub, INVITE_KEY_ALG, true, ["verify"]);
       const sig = b64urlDecodeToBytes(payload.sig);
-      return await crypto.subtle.verify(SIG, pubKey, sig, inviteSignatureBytes(payload));
-    } catch (err) {
-      console.warn("Invite signature verification failed", err);
+      return await cryptoImpl.subtle.verify(INVITE_SIG_ALG, pubKey, sig, inviteSignatureBytes(payload));
+    } catch {
       return false;
     }
+  }
+
+  // app/src/renderer.ts
+  var PENDING_INVITES_STORE_KEY = "unch_pending_invites_v1";
+  var USED_INVITES_STORE_KEY = "unch_used_invites_v1";
+  var CONSUMED_INVITES_STORE_KEY = "unch_consumed_invites_v1";
+  var pendingInvites = /* @__PURE__ */ new Map();
+  var usedInviteNonces = /* @__PURE__ */ new Set();
+  var consumedInviteNonces = /* @__PURE__ */ new Set();
+  var activeInvite = null;
+  loadPendingInvitesFromStorage();
+  cleanupExpiredPendingInvites();
+  loadUsedInviteNonces();
+  loadConsumedInviteNonces();
+  async function makeInvitePayload({ room }) {
+    const { token, payload, privateKey, privJwk } = await createInvite(room);
+    pendingInvites.set(payload.nonce, { room: payload.room, exp: payload.exp, privJwk, privKey: privateKey });
+    persistPendingInvites();
+    return { token, payload };
+  }
+  function parseInviteFromUrl(urlOrHash) {
+    try {
+      if (urlOrHash.includes("invite=")) {
+        const h = new URL(urlOrHash, location.origin).hash || urlOrHash;
+        const m = h.match(/invite=([^&]+)/);
+        if (!m) return null;
+        return decodeInviteToken(m[1]);
+      } else if (urlOrHash.includes("#")) {
+        const frag = urlOrHash.split("#")[1];
+        return decodeInviteToken(frag);
+      }
+    } catch (e) {
+      console.warn("Bad invite payload", e);
+    }
+    return null;
   }
   function loadPendingInvitesFromStorage() {
     try {
@@ -819,11 +840,6 @@
       }
       console.warn("Invite handshake rejected", reason);
     }
-  }
-  function randNonceHex(n = 16) {
-    const a = new Uint8Array(n);
-    crypto.getRandomValues(a);
-    return Array.from(a).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
   window.addEventListener("DOMContentLoaded", bindInviteUI);
 })();
