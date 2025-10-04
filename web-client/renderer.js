@@ -703,6 +703,11 @@ console.log('Unchaine web renderer loaded');
     const copyBtn = document.getElementById("copyInviteBtn");
     const pasteEl = document.getElementById("pasteInvite");
     const useBtn = document.getElementById("useInviteBtn");
+    const showQrBtn = document.getElementById('showQrBtn');
+    const qrModal = document.getElementById('qrModal');
+    const qrCanvas = document.getElementById('qrCanvas');
+    const qrClose = document.getElementById('qrClose');
+    const qrHint = document.getElementById('qrHint');
     let invitePopover = null;
     function closeInvitePopover() {
       if (invitePopover) {
@@ -813,6 +818,7 @@ console.log('Unchaine web renderer loaded');
             if (invitePopover && !invitePopover.contains(e.target)) closeInvitePopover();
           }
         }, 0);
+        showInviteCountdown(tokenInfo.payload.exp);
       } catch (err) {
         console.error("Failed to create invite", err);
         if (err instanceof Error && /subtle/i.test(err.message)) {
@@ -844,6 +850,62 @@ console.log('Unchaine web renderer loaded');
     }
     const p = parseInviteFromUrl(location.href);
     if (p) void applyInvite(p, { autoJoin: true });
+    // Elements
+    const qrHint = document.getElementById('qrHint');
+    const qrModal = document.getElementById('qrModal');
+    const qrClose = document.getElementById('qrClose');
+    const qrCanvas = document.getElementById('qrCanvas');
+    function openQrModal(){ qrModal?.classList.add('open'); }
+    function closeQrModal(){ qrModal?.classList.remove('open'); }
+    qrClose?.addEventListener('click', closeQrModal);
+    qrModal?.addEventListener('click', (e)=>{ if(e.target === qrModal) closeQrModal(); });
+    // Draw QR for current invite link
+    async function renderInviteQR() {
+      const link = (inviteLinkEl && inviteLinkEl.value) || '';
+      if (!link) { alert('Create an invite first'); return; }
+      try {
+        // Draw a crisp QR (errorCorrectionLevel 'M' is fine)
+        await QRCode.toCanvas(qrCanvas, link, { errorCorrectionLevel: 'M', margin: 1, width: 256 });
+        openQrModal();
+      } catch (e) {
+        console.error('QR render failed', e);
+        alert('Could not render QR');
+      }
+    }
+    // Hook button
+    showQrBtn?.addEventListener('click', renderInviteQR);
+    // Update hint with countdown (called by your existing countdown)
+    function setQrHint(text){ if (qrHint) qrHint.textContent = text; }
+    // --- integrate with your existing countdown ---
+    function startInviteCountdown(expTs) {
+      const expiryEl = document.getElementById('inviteExpiry');
+      const copyBtn = document.getElementById('copyInviteBtn');
+      const qrBtn = document.getElementById('showQrBtn');
+
+      function updateCountdown() {
+        const now = Date.now();
+        const diff = Math.max(0, expTs - now);
+
+        if (diff <= 0) {
+          const msg = "This invite has expired. Please create a new one.";
+          if (expiryEl) expiryEl.textContent = msg;
+          if (qrBtn) qrBtn.disabled = true;
+          if (copyBtn) copyBtn.disabled = true;
+          setQrHint(msg);
+          return;
+        }
+
+        const mins = Math.floor(diff / 60000);
+        const secs = Math.floor((diff % 60000) / 1000);
+        const text = mins > 0 ? `This link expires in ${mins}:${secs.toString().padStart(2,'0')}` :
+                                `This link expires in ${secs}s`;
+        if (expiryEl) expiryEl.textContent = text;
+        setQrHint(text);
+
+        setTimeout(updateCountdown, 1000);
+      }
+      updateCountdown();
+    }
   }
   var ALG = { name: "ECDSA", namedCurve: "P-256" };
   var SIG = { name: "ECDSA", hash: "SHA-256" };
@@ -966,4 +1028,76 @@ console.log('Unchaine web renderer loaded');
   window.join = () => {
     switchToRoom(roomEl.value || "");
   };
+  // Add countdown UI for invite expiry
+  function showInviteCountdown(expiryTimestamp) {
+    let countdownEl = document.getElementById('inviteCountdown');
+    if (!countdownEl) {
+      countdownEl = document.createElement('span');
+      countdownEl.id = 'inviteCountdown';
+      countdownEl.style.marginLeft = '12px';
+      countdownEl.style.fontSize = '13px';
+      countdownEl.style.color = '#888';
+      const inviteLinkInput = document.getElementById('inviteLink');
+      if (inviteLinkInput && inviteLinkInput.parentNode) {
+        inviteLinkInput.parentNode.appendChild(countdownEl);
+      }
+    }
+    function updateCountdown() {
+      const now = Date.now();
+      const msLeft = expiryTimestamp - now;
+      if (msLeft <= 0) {
+        countdownEl.textContent = 'Expired';
+        return;
+      }
+      const min = Math.floor(msLeft / 60000);
+      const sec = Math.floor((msLeft % 60000) / 1000);
+      countdownEl.textContent = `Expires in ${min}:${sec.toString().padStart(2,'0')}`;
+      setTimeout(updateCountdown, 1000);
+    }
+    updateCountdown();
+  }
+  function startInviteCountdown(expTs) {
+    const expiryEl = document.getElementById('inviteExpiry');
+    if (!expiryEl) return;
+
+    function updateCountdown() {
+      const now = Date.now();
+      const diff = Math.max(0, expTs - now);
+
+      if (diff <= 0) {
+        expiryEl.textContent = "This invite has expired. Please create a new one.";
+        // disable copy/QR buttons
+        const copyBtn = document.getElementById('copyInviteBtn');
+        if (copyBtn) copyBtn.disabled = true;
+        return;
+      }
+
+      const mins = Math.floor(diff / 60000);
+      const secs = Math.floor((diff % 60000) / 1000);
+
+      if (mins > 0) {
+        expiryEl.textContent = `This link expires in ${mins}:${secs.toString().padStart(2,'0')}`;
+      } else {
+        expiryEl.textContent = `This link expires in ${secs}s`;
+      }
+
+      setTimeout(updateCountdown, 1000);
+    }
+
+    updateCountdown();
+  }
+  async function handleInviteOnLoad(){
+    const inv = parseInviteFromLocation();
+    if (!inv) return;
+    try {
+      await validateInvite(inv); // this already checks exp!
+      // auto-fill and join
+      const roomEl = document.getElementById('room');
+      if (roomEl) roomEl.value = inv.room;
+      window.__UNCH_CURRENT_INVITE__ = inv;
+      if (typeof join === 'function') join();
+    } catch (e){
+      alert('This invite is no longer valid. Please ask your friend for a new one.');
+    }
+  }
 })();

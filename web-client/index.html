@@ -262,6 +262,47 @@
     .wrap { padding: 24px 20px; }
     .msgs { padding-bottom: 16px; gap: 12px; }
   }
+
+  .qr-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+  }
+  .qr-modal.open {
+    display: flex;
+  }
+  .qr-dialog {
+    background: #fff;
+    border-radius: 16px;
+    padding: 16px 16px 10px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.25);
+    width: 320px;
+    max-width: 90vw;
+    text-align: center;
+  }
+  .qr-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    font-weight: 700;
+  }
+  .qr-close {
+    border: 0;
+    background: #f2f2f2;
+    border-radius: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+  }
+  .qr-hint {
+    margin-top: 8px;
+    color: #666;
+    font-size: 13px;
+  }
   </style>
 </head>
 <body>
@@ -282,9 +323,12 @@
     <div class="room-tabs-label hidden" id="roomTabsLabel">Recent Rooms</div>
     <div class="room-tabs hidden" id="roomTabs"></div>
     <div class="toolbar-row">
-      <button id="createInviteBtn">Create Invite</button>
-      <input id="inviteLink" placeholder="Invite link">
-      <button id="copyInviteBtn" class="outline">Copy</button>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button id="createInviteBtn">Create Invite</button>
+        <input id="inviteLink" placeholder="Invite link" style="flex:1;">
+        <button id="copyInviteBtn">Copy</button>
+        <button id="showQrBtn">Show QR</button>
+      </div>
     </div>
     <div class="toolbar-row">
       <input id="pasteInvite" placeholder="Paste invite link or token">
@@ -299,9 +343,23 @@
       <button id="sendBtn" class="send">Send</button>
     </div>
   </div>
+  <div id="inviteExpiry" style="margin-top:4px;color:#666;font-size:14px;"></div>
+</div>
+
+<!-- QR Modal -->
+<div id="qrModal" class="qr-modal" aria-hidden="true">
+  <div class="qr-dialog">
+    <div class="qr-head">
+      <div>Scan to join</div>
+      <button id="qrClose" class="qr-close" aria-label="Close">✕</button>
+    </div>
+    <canvas id="qrCanvas" width="256" height="256"></canvas>
+    <div id="qrHint" class="qr-hint"></div>
+  </div>
 </div>
 
 <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+<script src="https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js"></script>
 <!-- Load the web client bundle -->
 <script src="./renderer.js?v=dev1"></script>
 </body>
